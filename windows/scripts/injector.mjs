@@ -39,7 +39,11 @@ const stableTestidLiteral = (testid) => {
   }
   return JSON.stringify(`[data-testid="${testid}"]`);
 };
-const SKIN_VERSION = "1.5.7";
+const SKIN_VERSION = "1.5.12";
+const INTERNET_ANGEL_EXTENSION_THEME_IDS = new Set([
+  "preset-internet-angel",
+  "preset-internet-angel-default",
+]);
 const MAX_ART_BYTES = 10 * 1024 * 1024;
 const MAX_SAFE_CSS_BYTES = 256 * 1024;
 const STRONG_THEME_AUDIT_MS = 30000;
@@ -52,6 +56,10 @@ const OPERATION_UI_HOST_ID = "chatgpt-dream-skin-operation";
 const OPERATION_UI_REGISTRY_KEY = "__CHATGPT_DREAM_SKIN_OPERATION_UI__";
 const OPERATION_KINDS = new Set(["apply", "pause", "switch"]);
 const OPERATION_UI_STATES = new Set(["success", "error", "cancelled"]);
+
+export function usesInternetAngelExtension(theme) {
+  return INTERNET_ANGEL_EXTENSION_THEME_IDS.has(String(theme?.id || "").trim());
+}
 // Shared with macOS: in-renderer progress for pause/apply so both platforms feel the same.
 const OPERATION_UI_CSS = `
   :host {
@@ -156,6 +164,12 @@ function parseArgs(argv) {
     operationUiState: null,
     operationMessage: null,
     operationToken: null,
+    win32WindowPid: null,
+    win32WindowHwnd: null,
+    win32WindowWidth: null,
+    win32WindowHeight: null,
+    windowMaterial: "system",
+    allowHiddenDocument: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -175,6 +189,12 @@ function parseArgs(argv) {
     else if (arg === "--operation-ui-state") options.operationUiState = argv[++i];
     else if (arg === "--operation-message") options.operationMessage = argv[++i];
     else if (arg === "--operation-token") options.operationToken = argv[++i];
+    else if (arg === "--win32-window-pid") options.win32WindowPid = argv[++i];
+    else if (arg === "--win32-window-hwnd") options.win32WindowHwnd = argv[++i];
+    else if (arg === "--win32-window-width") options.win32WindowWidth = argv[++i];
+    else if (arg === "--win32-window-height") options.win32WindowHeight = argv[++i];
+    else if (arg === "--window-material") options.windowMaterial = argv[++i];
+    else if (arg === "--allow-hidden-document") options.allowHiddenDocument = true;
     else if (arg === "--reload") options.reload = true;
     else if (arg === "--self-test") options.mode = "self-test";
     else if (arg === "--check-payload") options.mode = "check-payload";
@@ -191,6 +211,42 @@ function parseArgs(argv) {
   }
   if (options.operationToken !== null && !/^\d{1,12}:\d{13}:\d{1,8}$/.test(options.operationToken)) {
     throw new Error("Invalid operation token");
+  }
+  if (!new Set(["system", "acrylic"]).has(options.windowMaterial)) {
+    throw new Error(`Invalid window material: ${options.windowMaterial}`);
+  }
+  const win32EvidenceValues = [
+    options.win32WindowPid,
+    options.win32WindowHwnd,
+    options.win32WindowWidth,
+    options.win32WindowHeight,
+  ];
+  const win32EvidenceCount = win32EvidenceValues.filter((value) => value !== null).length;
+  if (win32EvidenceCount !== 0 && win32EvidenceCount !== win32EvidenceValues.length) {
+    throw new Error("Win32 window evidence requires PID, HWND, width, and height");
+  }
+  if (win32EvidenceCount === win32EvidenceValues.length) {
+    if (!/^[1-9]\d{0,9}$/.test(options.win32WindowPid)
+      || Number(options.win32WindowPid) > 0xffffffff
+      || !/^[1-9]\d{0,19}$/.test(options.win32WindowHwnd)
+      || !/^[1-9]\d{0,5}$/.test(options.win32WindowWidth)
+      || !/^[1-9]\d{0,5}$/.test(options.win32WindowHeight)) {
+      throw new Error("Invalid Win32 window evidence");
+    }
+    const width = Number(options.win32WindowWidth);
+    const height = Number(options.win32WindowHeight);
+    if (width < MIN_RENDERER_VIEWPORT_WIDTH || height < MIN_RENDERER_VIEWPORT_HEIGHT) {
+      throw new Error("Win32 window evidence is smaller than the renderer safety floor");
+    }
+    options.win32WindowEvidence = {
+      source: "win32-hwnd",
+      processId: Number(options.win32WindowPid),
+      hwnd: options.win32WindowHwnd,
+      width,
+      height,
+    };
+  } else {
+    options.win32WindowEvidence = null;
   }
   if (options.mode === "begin-operation") {
     if (!OPERATION_KINDS.has(options.operationKind)) {
@@ -211,6 +267,12 @@ function parseArgs(argv) {
   }
   if (["watch", "once", "verify", "remove"].includes(options.mode) && !options.browserId) {
     throw new Error(`--browser-id is required in ${options.mode} mode`);
+  }
+  if (options.allowHiddenDocument && options.mode !== "verify") {
+    throw new Error("--allow-hidden-document is only valid in verify mode");
+  }
+  if (options.allowHiddenDocument && !options.win32WindowEvidence) {
+    throw new Error("--allow-hidden-document requires complete Win32 window evidence");
   }
   return options;
 }
@@ -248,6 +310,10 @@ function isValidCdpPageTarget(item, port) {
   if (item?.type !== "page" || !item.url?.startsWith("app://") || typeof item.id !== "string" ||
       !BROWSER_ID_PATTERN.test(item.id) || !item.webSocketDebuggerUrl) return false;
   try {
+    const targetUrl = new URL(item.url);
+    if (targetUrl.protocol !== "app:" || targetUrl.searchParams.get("initialRoute") === "/avatar-overlay") {
+      return false;
+    }
     const debuggerUrl = new URL(validatedDebuggerUrl(item, port));
     return debuggerUrl.pathname === `/devtools/page/${item.id}`;
   } catch {
@@ -328,8 +394,13 @@ export class CdpSession {
       if (!waiter) return;
       clearTimeout(waiter.timeout);
       this.pending.delete(message.id);
-      if (message.error) waiter.reject(new Error(`${message.error.message} (${message.error.code})`));
-      else waiter.resolve(message.result);
+      if (message.error) {
+        // Keep the numeric CDP code on the rejection: unavailableNativeWindow
+        // reads it directly instead of re-parsing a build-specific message.
+        const error = new Error(`${message.error.message} (${message.error.code})`);
+        error.cdpCode = message.error.code;
+        waiter.reject(error);
+      } else waiter.resolve(message.result);
       return;
     }
     for (const listener of this.listeners.get(message.method) ?? []) {
@@ -490,6 +561,13 @@ export async function connectBrowserIdentityAnchor(port, expectedBrowserId, onTa
     const pageTargetIds = new Set();
     const wakeForPage = (params) => {
       if (params.targetInfo?.type !== "page") return;
+      try {
+        const targetUrl = new URL(params.targetInfo.url);
+        if (targetUrl.protocol !== "app:" ||
+            targetUrl.searchParams.get("initialRoute") === "/avatar-overlay") return;
+      } catch {
+        return;
+      }
       pageTargetIds.add(params.targetInfo.targetId);
       onTargetChange(params.targetInfo);
     };
@@ -505,6 +583,33 @@ export async function connectBrowserIdentityAnchor(port, expectedBrowserId, onTa
     console.error(`[dream-skin] CDP target events unavailable; polling fallback active: ${error.message}`);
     return new BrowserIdentityAnchor(validatedDebuggerUrl(version, port)).open();
   }
+}
+
+export async function connectBrowserIdentityAnchorWithRetry(
+  port,
+  expectedBrowserId,
+  onTargetChange = null,
+  { attempts = 6, delayMs = 500 } = {},
+) {
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 20) {
+    throw new Error("CDP identity anchor retry attempts must be an integer from 1 to 20");
+  }
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 5000) {
+    throw new Error("CDP identity anchor retry delay must be an integer from 0 to 5000 ms");
+  }
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await connectBrowserIdentityAnchor(port, expectedBrowserId, onTargetChange);
+    } catch (error) {
+      if (error instanceof CdpIdentityMismatchError) throw error;
+      lastError = error;
+      if (attempt < attempts && delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
 }
 
 const THEME_CHOICES = {
@@ -565,8 +670,8 @@ async function loadSafeCss(themeRoot) {
     if (!sameFileStat(before, after) || bytes.length !== after.size) {
       throw new Error("Theme Safe CSS changed while being loaded");
     }
-    const { source, validation } = decodeAndValidateSafeCss(bytes);
-    return { path: cssPath, source, stat: after, validation };
+    const { source, runtimeSource, validation } = decodeAndValidateSafeCss(bytes);
+    return { path: cssPath, runtimeSource, source, stat: after, validation };
   } finally {
     await handle.close();
   }
@@ -597,24 +702,20 @@ export async function loadTheme(themeDir) {
     throw new Error("Theme image cannot escape through a link or junction");
   }
   const art = raw.art && typeof raw.art === "object" && !Array.isArray(raw.art) ? raw.art : {};
-  const palette = raw.palette && typeof raw.palette === "object" && !Array.isArray(raw.palette)
-    ? raw.palette : {};
   const rawColors = raw.colors && typeof raw.colors === "object" && !Array.isArray(raw.colors)
     ? raw.colors : null;
+  const rawPalette = raw.palette && typeof raw.palette === "object" && !Array.isArray(raw.palette)
+    ? raw.palette : null;
+  const legacyAccent = normalizeThemeColor(rawPalette?.accent, null);
   const colorKeys = [
     "background", "panel", "panelAlt", "accent", "accentAlt", "secondary",
     "highlight", "text", "muted", "line",
   ];
-  const paletteAccent = typeof palette.accent === "string" && palette.accent.trim()
-    ? palette.accent.trim() : "";
-  if (paletteAccent && !/^(?:#[\da-f]{3,8}|(?:rgb|hsl|oklch|oklab)\([^;{}]{1,96}\))$/i.test(paletteAccent)) {
-    throw new Error("palette.accent is not a supported CSS color");
-  }
   const colors = {
     background: normalizeThemeColor(rawColors?.background, "#071116"),
     panel: normalizeThemeColor(rawColors?.panel, "#0b1a20"),
     panelAlt: normalizeThemeColor(rawColors?.panelAlt, "#10272c"),
-    accent: normalizeThemeColor(rawColors?.accent, normalizeThemeColor(paletteAccent, "#7cff46")),
+    accent: normalizeThemeColor(rawColors?.accent, legacyAccent ?? "#7cff46"),
     accentAlt: normalizeThemeColor(rawColors?.accentAlt, "#b8ff3d"),
     secondary: normalizeThemeColor(rawColors?.secondary, "#36d7e8"),
     highlight: normalizeThemeColor(rawColors?.highlight, "#642a8c"),
@@ -622,6 +723,10 @@ export async function loadTheme(themeDir) {
     muted: normalizeThemeColor(rawColors?.muted, "#9ebdb3"),
     line: normalizeThemeColor(rawColors?.line, "rgba(124, 255, 70, .28)"),
   };
+  const explicitColorKeys = rawColors
+    ? colorKeys.filter((key) =>
+      Object.hasOwn(rawColors, key) || (key === "accent" && legacyAccent !== null))
+    : (legacyAccent !== null ? ["accent"] : []);
   const theme = {
     id: normalizeThemeText(raw.id, "custom", 80, "id", themePath),
     name: normalizeThemeText(raw.name, "Codex Dream Skin", 80, "name", themePath),
@@ -639,14 +744,10 @@ export async function loadTheme(themeDir) {
       safeArea: normalizedChoice(art.safeArea, "art.safeArea", THEME_CHOICES.safeArea, "auto"),
       taskMode: normalizedChoice(art.taskMode, "art.taskMode", THEME_CHOICES.taskMode, "auto"),
     },
-    colorMode: rawColors ? "explicit" : (paletteAccent ? "explicit" : "auto"),
-    explicitColorKeys: rawColors
-      ? colorKeys.filter((key) => Object.hasOwn(rawColors, key))
-      : (paletteAccent ? ["accent"] : []),
+    colorMode: rawColors || legacyAccent ? "explicit" : "auto",
+    explicitColorKeys,
     colors,
-    palette: {},
   };
-  if (paletteAccent) theme.palette.accent = paletteAccent;
   const [themeStat, imageStat, safeCss] = await Promise.all([
     fs.stat(themePath),
     fs.stat(realImagePath),
@@ -679,6 +780,7 @@ export async function loadTheme(themeDir) {
     imagePath: realImagePath,
     imageBytes,
     safeCss: safeCss?.source ?? "",
+    safeCssRuntime: safeCss?.runtimeSource ?? "",
     safeCssPath: safeCss?.path ?? null,
     safeCssStatus: safeCss ? "validated" : "none",
     fingerprint,
@@ -687,39 +789,98 @@ export async function loadTheme(themeDir) {
   };
 }
 
-async function loadPayload(themeDir = path.join(root, "assets"), candidateTheme = null) {
+export async function loadPayload(
+  themeDir = path.join(root, "assets"),
+  candidateTheme = null,
+  windowMaterial = "system",
+) {
+  if (!new Set(["system", "acrylic"]).has(windowMaterial)) {
+    throw new Error(`Invalid window material: ${windowMaterial}`);
+  }
   const loadedTheme = candidateTheme ?? await loadTheme(themeDir);
-  const [css, template] = await Promise.all([
+  const [baseCss, template, internetAngelCss, internetAngelTemplate, acrylicCss] = await Promise.all([
     fs.readFile(path.join(root, "assets", "dream-skin.css"), "utf8"),
     fs.readFile(path.join(root, "assets", "renderer-inject.js"), "utf8"),
+    fs.readFile(path.join(root, "assets", "internet-angel-extension.css"), "utf8"),
+    fs.readFile(path.join(root, "assets", "internet-angel-extension.js"), "utf8"),
+    fs.readFile(path.join(root, "assets", "internet-angel-acrylic.css"), "utf8"),
   ]);
-  const combinedCss = loadedTheme.safeCss ? `${css}\n${loadedTheme.safeCss}\n` : css;
+  const internetAngelExtension = usesInternetAngelExtension(loadedTheme.theme);
+  const acrylicOverlay = internetAngelExtension && windowMaterial === "acrylic";
+  // Acrylic consumes the renderer's durable dream-* classes directly. Running
+  // the legacy Internet Angel classifier as well would rescan the full task DOM
+  // after clicks and mutations even though none of its data markers are used.
+  const internetAngelClassifier = internetAngelExtension && !acrylicOverlay;
+  const themedCss = internetAngelExtension ? `${baseCss}\n${internetAngelCss}` : baseCss;
+  const themedAndSafeCss = loadedTheme.safeCssRuntime
+    ? `${themedCss}\n${loadedTheme.safeCssRuntime}\n` : themedCss;
+  const acrylicAndSafeCss = loadedTheme.safeCssRuntime
+    ? `${baseCss}\n${loadedTheme.safeCssRuntime}\n${acrylicCss}\n`
+    : `${baseCss}\n${acrylicCss}\n`;
   const extension = path.extname(loadedTheme.imagePath).toLowerCase();
   const mime = extension === ".jpg" || extension === ".jpeg" ? "image/jpeg"
     : extension === ".webp" ? "image/webp" : "image/png";
   const artDataUrl = `data:${mime};base64,${loadedTheme.imageBytes.toString("base64")}`;
-  const styleRevision = createHash("sha256").update(combinedCss).digest("hex").slice(0, 20);
+  // System material keeps the Internet Angel classifier and its marker-based
+  // CSS. Acrylic consumes durable renderer classes instead, so omit that legacy
+  // layer while retaining validated per-theme Safe CSS in both modes.
+  const injectedCss = acrylicOverlay ? acrylicAndSafeCss : themedAndSafeCss;
+  const styleRevision = createHash("sha256").update(injectedCss).digest("hex").slice(0, 20);
   loadedTheme.theme.artKey = createHash("sha256")
     .update(loadedTheme.imageBytes).digest("hex").slice(0, 20);
   const revision = createHash("sha256")
     .update(SKIN_VERSION)
-    .update(combinedCss)
+    .update(windowMaterial)
+    .update(injectedCss)
     .update(template)
+    .update(internetAngelTemplate)
     .update(JSON.stringify(loadedTheme.theme))
     .digest("hex")
     .slice(0, 20);
-  const payload = template
-    .replace("__DREAM_SKIN_CSS_JSON__", JSON.stringify(combinedCss))
-    .replace("__DREAM_SKIN_ART_JSON__", JSON.stringify(artDataUrl))
-    .replace("__DREAM_SKIN_THEME_JSON__", JSON.stringify(loadedTheme.theme))
-    .replace("__DREAM_SKIN_VERSION_JSON__", JSON.stringify(SKIN_VERSION))
-    .replace("__DREAM_SKIN_STYLE_REVISION_JSON__", JSON.stringify(styleRevision))
-    .replace("__DREAM_SKIN_PAYLOAD_REVISION_JSON__", JSON.stringify(revision))
-    .replace("__DREAM_CSS_JSON__", JSON.stringify(css))
-    .replace("__DREAM_ART_JSON__", JSON.stringify(artDataUrl))
-    .replace("__DREAM_THEME_JSON__", JSON.stringify(loadedTheme.theme));
+  // Every replacement uses a function so String.prototype.replace never
+  // interprets $$, $&, $` or $' inside the substituted JSON. Theme text is
+  // user-controlled (theme.json legitimately allows "$"), and a literal-string
+  // replacement would splice the template source back into the payload -- a
+  // stray "$`" produced a SyntaxError, while "$&"/"$$" silently corrupted the
+  // theme name.
+  const basePayload = template
+    .replace("__DREAM_SKIN_CSS_JSON__", () => JSON.stringify(injectedCss))
+    .replace("__DREAM_SKIN_ART_JSON__", () => JSON.stringify(artDataUrl))
+    .replace("__DREAM_SKIN_THEME_JSON__", () => JSON.stringify(loadedTheme.theme))
+    .replace("__DREAM_SKIN_VERSION_JSON__", () => JSON.stringify(SKIN_VERSION))
+    .replace("__DREAM_SKIN_STYLE_REVISION_JSON__", () => JSON.stringify(styleRevision))
+    .replace("__DREAM_SKIN_PAYLOAD_REVISION_JSON__", () => JSON.stringify(revision))
+    .replace("__DREAM_CSS_JSON__", () => JSON.stringify(injectedCss))
+    .replace("__DREAM_ART_JSON__", () => JSON.stringify(artDataUrl))
+    .replace("__DREAM_THEME_JSON__", () => JSON.stringify(loadedTheme.theme))
+    .replace("__DREAM_SIDEBAR_SCROLL_QUIET_ENABLED_JSON__", () => JSON.stringify(acrylicOverlay));
+  const payload = `${basePayload};\n${internetAngelTemplate.replace(
+    "__INTERNET_ANGEL_EXTENSION_ENABLED_JSON__",
+    () => JSON.stringify(internetAngelClassifier),
+  )}`;
+  // Defence in depth for every caller, not just --check-payload: a template
+  // splice leaves an unreplaced placeholder token behind and usually breaks the
+  // syntax outright, so refuse to hand a corrupted script to the renderer.
+  if (/__(?:DREAM(?:_SKIN)?|INTERNET_ANGEL_EXTENSION)_[A-Z0-9_]+_JSON__/.test(payload)) {
+    throw new Error("Payload placeholders were not fully replaced");
+  }
+  try {
+    // Compile-only: this parses the payload and discards the result. It never
+    // runs the renderer script here.
+    new Function(payload);
+  } catch (error) {
+    throw new Error(`Payload failed to parse as JavaScript: ${error.message}`);
+  }
   const { imageBytes: _imageBytes, ...themeState } = loadedTheme;
-  return { ...themeState, payload, revision };
+  return {
+    ...themeState,
+    internetAngelExtension,
+    internetAngelClassifier,
+    acrylicOverlay,
+    windowMaterial,
+    payload,
+    revision,
+  };
 }
 
 async function fileExists(filePath) {
@@ -747,19 +908,31 @@ async function readThemeSourceStamp(loadedTheme) {
 
 async function probeSession(session) {
   return session.evaluate(`(() => {
+    const genericCodexSurface = () => {
+      if (location.protocol !== 'app:') return false;
+      const main = document.querySelector('main, [role="main"]');
+      const input = document.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
+      const branded = Boolean(document.querySelector(
+        ${stableTestidLiteral("app-shell-header-context-menu-surface")},
+      ));
+      return Boolean(main && input && branded);
+    };
     const markers = {
       shell: Boolean(document.querySelector(${selectorLiteral("shell-main")})),
       sidebar: Boolean(document.querySelector(${selectorLiteral("left-panel")})),
       header: Boolean(document.querySelector(${selectorLiteral("header-tint")})),
       composer: Boolean(document.querySelector(${selectorLiteral("composer-chrome")})),
       main: Boolean(document.querySelector(${selectorLiteral("home-route")})),
+      generic: genericCodexSurface(),
     };
-    const settings = Boolean(document.querySelector(${selectorLiteral("appearance-radio")})) ||
+    const settings = Boolean(document.querySelector(${selectorLiteral("settings-panel")})) ||
+      Boolean(document.querySelector(${selectorLiteral("appearance-radio")})) ||
       Boolean(document.querySelector(${stableTestidLiteral("theme-preview")}));
-    return {
-      markers,
-      codex: location.protocol === 'app:' &&
-        ((markers.shell && (markers.sidebar || (markers.header && markers.composer))) || settings || markers.main),
+      return {
+        markers,
+        codex: location.protocol === 'app:' &&
+          ((markers.shell && (markers.sidebar || (markers.header && markers.composer))) ||
+            settings || markers.main || markers.generic),
     };
   })()`);
 }
@@ -783,34 +956,47 @@ async function connectTarget(target, port) {
   return new CdpSession(target, port).open();
 }
 
-function unavailableNativeWindow(error, allowVisibleDocumentFallback = false) {
-  const detail = String(error?.message ?? "");
+function unavailableNativeWindow(error, win32WindowEvidence = null) {
+  const message = String(error?.message ?? "");
   const cdpCode = Number(error?.cdpCode);
-  const withoutCode = detail.replace(/\s*\(-?\d+\)\s*$/, "").trim();
+  const withoutCode = message.replace(/\s*\(-?\d+\)\s*$/, "").trim();
   const domainUnsupported = cdpCode === -32601
-    || /\(-32601\)\s*$/.test(detail)
+    || /\(-32601\)\s*$/.test(message)
     || /^method(?: ['"]Browser\.getWindowForTarget['"])? not found$/i.test(withoutCode)
     || /^['"]?Browser\.getWindowForTarget['"]? (?:wasn't|was not) found$/i.test(withoutCode);
-  // Codex 26.721+ can expose a real visible app renderer while Chromium 150
-  // still returns -32000 for Browser.getWindowForTarget.  This is the same
-  // production behavior already handled by the macOS injector: only this
-  // exact unsupported binding is allowed to fall back to the renderer's hard
-  // visibility, viewport, structure, Browser-ID and payload checks.
-  const windowNotFound = cdpCode === -32000
-    || /\(-32000\)\s*$/.test(detail)
-    || /^(?:browser window not found|no window with given target found)$/i.test(withoutCode);
-  const fallback = allowVisibleDocumentFallback && (domainUnsupported || windowNotFound);
-  return {
-    pass: fallback,
+  // Codex 26.721.x (Chrome/150) returns -32000 "Browser window not found"
+  // for a real, focused window. The signal is therefore unavailable rather
+  // than negative; the visible renderer checks remain mandatory below.
+  const windowNotFoundMessage = /^browser window not found$/i.test(withoutCode)
+    || /^no window with given target found$/i.test(withoutCode);
+  const windowNotFound = windowNotFoundMessage
+    && (cdpCode === -32000 || /\(-32000\)\s*$/.test(message));
+  const result = {
+    pass: false,
     bound: false,
-    fallback,
+    unsupported: domainUnsupported || windowNotFound,
     reason: domainUnsupported ? "browser-window-api-unavailable"
-      : windowNotFound ? "target-window-unavailable"
-      : "native-window-unavailable",
+      : windowNotFound ? "browser-window-not-found"
+      : "target-window-unavailable",
+  };
+  if (!result.unsupported || win32WindowEvidence?.source !== "win32-hwnd") return result;
+  return {
+    ...result,
+    pass: true,
+    bound: true,
+    targetBound: false,
+    fallback: true,
+    source: "win32-hwnd",
+    processId: win32WindowEvidence.processId,
+    hwnd: win32WindowEvidence.hwnd,
+    width: win32WindowEvidence.width,
+    height: win32WindowEvidence.height,
+    cdpReason: result.reason,
+    reason: null,
   };
 }
 
-export async function inspectTargetWindow(session, targetId) {
+export async function inspectTargetWindow(session, targetId, win32WindowEvidence = null) {
   if (typeof targetId !== "string" || !BROWSER_ID_PATTERN.test(targetId)) {
     return { pass: false, bound: false, reason: "invalid-target-id" };
   }
@@ -819,7 +1005,7 @@ export async function inspectTargetWindow(session, targetId) {
   try {
     binding = await session.send("Browser.getWindowForTarget", { targetId });
   } catch (error) {
-    return unavailableNativeWindow(error, true);
+    return unavailableNativeWindow(error, win32WindowEvidence);
   }
   if (!Number.isInteger(binding?.windowId) || binding.windowId <= 0) {
     return { pass: false, bound: false, reason: "invalid-window-binding" };
@@ -828,8 +1014,13 @@ export async function inspectTargetWindow(session, targetId) {
   let latest;
   try {
     latest = await session.send("Browser.getWindowBounds", { windowId: binding.windowId });
-  } catch (error) {
-    return unavailableNativeWindow(error, false);
+  } catch {
+    return {
+      pass: false,
+      bound: true,
+      windowId: binding.windowId,
+      reason: "window-bounds-unavailable",
+    };
   }
   const bounds = { ...(binding.bounds ?? {}), ...(latest?.bounds ?? {}) };
   const state = typeof bounds.windowState === "string" ? bounds.windowState : null;
@@ -841,6 +1032,9 @@ export async function inspectTargetWindow(session, targetId) {
   return {
     pass: statePass && boundsPass,
     bound: true,
+    targetBound: true,
+    fallback: false,
+    source: "cdp-browser-window",
     windowId: binding.windowId,
     state,
     width,
@@ -904,9 +1098,16 @@ export function earlyPayloadFor(payload, revision) {
       const header = document.querySelector(${selectorLiteral("header-tint")});
       const composer = document.querySelector(${selectorLiteral("composer-chrome")});
       const main = document.querySelector(${selectorLiteral("home-route")});
-      const settings = document.querySelector(${selectorLiteral("appearance-radio")}) ||
+      const settings = document.querySelector(${selectorLiteral("settings-panel")}) ||
+        document.querySelector(${selectorLiteral("appearance-radio")}) ||
         document.querySelector(${stableTestidLiteral("theme-preview")});
-      return Boolean((shell && (sidebar || (header && composer))) || settings || main);
+      const genericMain = document.querySelector('main, [role="main"]');
+      const genericInput = document.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
+      const branded = Boolean(document.querySelector(
+        ${stableTestidLiteral("app-shell-header-context-menu-surface")},
+      ));
+      return Boolean((shell && (sidebar || (header && composer))) || settings || main ||
+        (genericMain && genericInput && branded));
     };
     const install = () => {
       if (window[generationKey] !== generation) { stop(); return true; }
@@ -1111,6 +1312,8 @@ async function presentOperationUi(session, token, state, message, timeoutMs = 10
 
 async function removeFromSession(session) {
   return session.evaluate(`(() => {
+    try { window.__CODEX_INTERNET_ANGEL_EXTENSION_STATE__?.cleanup?.(); } catch {}
+    delete window.__CODEX_INTERNET_ANGEL_EXTENSION_STATE__;
     window.__CODEX_DREAM_SKIN_DISABLED__ = true;
     const state = window.__CODEX_DREAM_SKIN_STATE__;
     let cleaned = false;
@@ -1163,8 +1366,10 @@ export async function verifySession(
   targetId,
   expectedThemeId = null,
   expectedRevision = null,
+  win32WindowEvidence = null,
+  allowHiddenDocument = false,
 ) {
-  const nativeWindow = await inspectTargetWindow(session, targetId);
+  const nativeWindow = await inspectTargetWindow(session, targetId, win32WindowEvidence);
   return session.evaluate(`(() => {
     const box = (node) => {
       if (!node) return null;
@@ -1191,11 +1396,34 @@ export async function verifySession(
         visible: Boolean(node.isConnected !== false && cssVisible && intersectsViewport),
       };
     };
-    const home = document.querySelector(${selectorLiteral("home-route")});
-    const settingsAnchor = document.querySelector(${selectorLiteral("appearance-radio")}) ||
+    const homeIndicator = document.querySelector(${selectorLiteral("home-icon")});
+    const homeSignal = homeIndicator ?? document.querySelector(${selectorLiteral("game-source")}) ??
+      document.querySelector(${selectorLiteral("home-suggestions")});
+    const homeRoute = homeSignal?.closest('[role="main"]') ?? null;
+    // Codex 26.721.x can render semantic home content before home-icon.
+    const home = document.querySelector(${selectorLiteral("home-route")}) ?? homeRoute;
+    const settingsAnchor = document.querySelector(${selectorLiteral("settings-panel")}) ||
+      document.querySelector(${selectorLiteral("appearance-radio")}) ||
       document.querySelector(${stableTestidLiteral("theme-preview")});
     const suggestions = home?.querySelector(${selectorLiteral("home-suggestions")}) ?? null;
-    const cards = suggestions ? [...suggestions.querySelectorAll('button')].map(box) : [];
+    const cardButtons = suggestions ? [...suggestions.querySelectorAll('button')] : [];
+    const cards = cardButtons.map(box);
+    const visibleCards = cards.filter((item) => item?.visible);
+    const suggestionLabels = cardButtons.flatMap((button) => {
+      const expectedColor = getComputedStyle(button).color;
+      return [...button.querySelectorAll('*')]
+        .filter((node) => [...node.childNodes].some((child) =>
+          child.nodeType === 3 && child.textContent.trim()))
+        .map((node) => ({
+          ...box(node),
+          text: String(node.textContent ?? "").trim().slice(0, 80),
+          color: getComputedStyle(node).color,
+          expectedColor,
+        }));
+    });
+    const visibleSuggestionLabels = suggestionLabels.filter((item) => item?.visible);
+    const suggestionLabelColorsMatch = visibleSuggestionLabels.every((item) =>
+      item.color === item.expectedColor);
     const runtime = window.__CODEX_DREAM_SKIN_STATE__;
     const adopted = runtime?.styleMode === 'adopted' &&
       [...document.adoptedStyleSheets].includes(runtime.styleSheet);
@@ -1237,10 +1465,15 @@ export async function verifySession(
       settingsAnchor: box(settingsAnchor),
       hero,
       cards,
+      visibleCardCount: visibleCards.length,
+      suggestionLabels,
+      suggestionLabelColorsMatch,
       composer: box(document.querySelector(${selectorLiteral("composer-chrome")})),
       shell: box(document.querySelector(${selectorLiteral("shell-main")})),
       sidebar: box(document.querySelector(${selectorLiteral("left-panel")})),
       header: box(document.querySelector(${selectorLiteral("header-tint")})),
+      genericMain: box(document.querySelector('[data-ds-part="main"], [data-ds-part="home"]')),
+      genericInput: box(document.querySelector('[data-ds-part="composer"]')),
       nativeWindow: ${JSON.stringify(nativeWindow)},
       documentVisibility: document.visibilityState ?? null,
       documentHidden: document.hidden === true,
@@ -1249,29 +1482,61 @@ export async function verifySession(
         x: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         y: document.documentElement.scrollHeight > document.documentElement.clientHeight,
       },
-    };
-    const l0AnchorPass = Boolean(result.settingsAnchor?.visible || result.homeSurface?.visible);
-    const structurePass = result.scope?.level === 'L0'
-      ? l0AnchorPass
-      : result.scope?.level === 'L1' && Boolean(result.shell?.visible &&
-        (result.sidebar?.visible || result.header?.visible));
+      };
+      const homeScope = result.scope?.baseState === 'home' || result.homePresent;
+      const l1ScopePass = result.scope?.level === 'L1' &&
+        Array.isArray(result.scope?.missingL1) && result.scope.missingL1.length === 0;
+      const genericStructurePass = l1ScopePass && Boolean(result.genericMain?.visible) &&
+        Boolean(result.genericInput?.visible || (homeScope && result.homeSurface?.visible));
+      const settingsStructurePass = Boolean(result.settingsAnchor?.visible);
+      const l0HomeStructurePass = result.scope?.level === 'L0' && Boolean(result.homeSurface?.visible);
+      const structurePass = settingsStructurePass || l0HomeStructurePass || (l1ScopePass && (
+        Boolean(result.shell?.visible && (
+          result.sidebar?.visible || (result.header?.visible && result.composer?.visible)
+        )) ||
+        genericStructurePass
+      ));
     const documentPass = result.documentVisibility === 'visible' && !result.documentHidden;
+    const hiddenDocumentPass = ${JSON.stringify(allowHiddenDocument)} &&
+      result.documentVisibility === 'hidden' && result.documentHidden;
+    const effectiveDocumentPass = documentPass || hiddenDocumentPass;
     const viewportPass = result.viewport.width >= ${MIN_RENDERER_VIEWPORT_WIDTH} &&
       result.viewport.height >= ${MIN_RENDERER_VIEWPORT_HEIGHT};
-    const windowPass = result.nativeWindow?.pass === true;
+    const nativeWindowPass = result.nativeWindow?.pass === true &&
+      result.nativeWindow?.source === 'cdp-browser-window';
+    // Compatibility fallback is deliberately native-only. Renderer DOM
+    // visibility can support the readiness decision, but cannot replace a
+    // window-ownership signal when Codex omits CDP Browser.WindowID.
+    const fallbackWindowPass = result.nativeWindow?.pass === true &&
+      result.nativeWindow?.source === 'win32-hwnd';
+    const windowPass = nativeWindowPass || fallbackWindowPass;
     const expectedThemeId = ${JSON.stringify(expectedThemeId)};
     const expectedRevision = ${JSON.stringify(expectedRevision)};
     const payloadPass = (!expectedThemeId || result.themeId === expectedThemeId) &&
       (!expectedRevision || result.revision === expectedRevision);
     result.expectedThemeId = expectedThemeId;
     result.expectedRevision = expectedRevision;
-    result.readiness = { windowPass, documentPass, viewportPass, structurePass };
-    result.pass = result.installed && result.version === result.expectedVersion &&
-      result.stylePresent && windowPass &&
-      documentPass && viewportPass && structurePass &&
-      payloadPass &&
-      (!result.homePresent || (Boolean(result.homeSurface?.visible && result.hero?.visible) &&
-        (!result.suggestionsPresent || (result.cards.length >= 2 && result.cards.length <= 4))));
+      result.readiness = {
+      windowPass, documentPass, viewportPass, structurePass,
+      nativeWindowPass, fallbackWindowPass,
+      hiddenDocumentAllowed: ${JSON.stringify(allowHiddenDocument)},
+      hiddenDocumentPass,
+        effectiveDocumentPass,
+      };
+      const internetAngelExpected = ${JSON.stringify(INTERNET_ANGEL_EXTENSION_THEME_IDS.has(expectedThemeId))};
+      const homePass = !homeScope || (
+      result.homePresent && Boolean(result.homeSurface?.visible) &&
+      ((result.hero?.visible && result.hero.width >= 280 && result.hero.height >= 120) ||
+        Boolean(result.genericMain?.visible)) &&
+        (!result.suggestionsPresent || result.visibleCardCount === 0 || (
+          result.suggestionLabels.filter((item) => item?.visible).length >= result.visibleCardCount &&
+          (internetAngelExpected || result.suggestionLabelColorsMatch)
+        ))
+      );
+      result.pass = result.installed && result.version === result.expectedVersion &&
+        result.stylePresent && windowPass &&
+        effectiveDocumentPass && viewportPass && structurePass &&
+        payloadPass && homePass;
     return result;
   })()`);
 }
@@ -1282,13 +1547,22 @@ async function waitForVerifiedSession(
   timeoutMs,
   expectedThemeId = null,
   expectedRevision = null,
+  win32WindowEvidence = null,
+  allowHiddenDocument = false,
 ) {
   const deadline = Date.now() + timeoutMs;
   let lastResult;
   let lastError;
   while (Date.now() < deadline) {
     try {
-      lastResult = await verifySession(session, targetId, expectedThemeId, expectedRevision);
+      lastResult = await verifySession(
+        session,
+        targetId,
+        expectedThemeId,
+        expectedRevision,
+        win32WindowEvidence,
+        allowHiddenDocument,
+      );
       lastError = null;
       if (lastResult.pass) return lastResult;
     } catch (error) {
@@ -1364,7 +1638,7 @@ async function runOneShot(options) {
   let loadedPayload = null;
   try {
     loadedPayload = (options.mode === "once" || options.mode === "verify" || options.reload)
-      ? await loadPayload(options.themeDir) : null;
+      ? await loadPayload(options.themeDir, null, options.windowMaterial) : null;
   } catch (error) {
     if (operationToken) {
       await Promise.all(connected.map(({ session }) => presentOperationUi(
@@ -1421,8 +1695,10 @@ async function runOneShot(options) {
               options.timeoutMs,
               loadedPayload?.theme.id ?? null,
               loadedPayload?.revision ?? null,
+              options.win32WindowEvidence,
+              options.allowHiddenDocument,
             )
-            : await verifySession(session, target.id);
+            : await verifySession(session, target.id, null, null, options.win32WindowEvidence);
         results.push({ targetId: target.id, markers: probe.markers, result: verified });
         if (operationToken) {
           const passed = options.mode === "remove" ? verified === true : verified?.pass;
@@ -1506,7 +1782,9 @@ async function runWatch(options) {
       wakeDiscoveryWait = finish;
     });
   };
-  const identityAnchor = await connectBrowserIdentityAnchor(
+  // Codex can expose /json/version and then briefly stall it during first paint.
+  // Bound startup retries while keeping every attempt pinned to the original Browser ID.
+  const identityAnchor = await connectBrowserIdentityAnchorWithRetry(
     options.port,
     options.browserId,
     wakeDiscoveryLoop,
@@ -1561,7 +1839,7 @@ async function runWatch(options) {
   process.on("SIGTERM", stop);
 
   try {
-    loadedPayload = await loadPayload(options.themeDir);
+    loadedPayload = await loadPayload(options.themeDir, null, options.windowMaterial);
     lastStrongThemeAuditAt = Date.now();
     paused = await fileExists(options.pauseFile);
     while (!stopping) {
@@ -1602,7 +1880,7 @@ async function runWatch(options) {
             const candidateTheme = await loadTheme(options.themeDir);
             lastStrongThemeAuditAt = now;
             if (!loadedPayload || candidateTheme.fingerprint !== loadedPayload.fingerprint) {
-              nextPayload = await loadPayload(options.themeDir, candidateTheme);
+              nextPayload = await loadPayload(options.themeDir, candidateTheme, options.windowMaterial);
             } else {
               loadedPayload.sourceStamp = candidateTheme.sourceStamp;
             }
@@ -1795,6 +2073,7 @@ if (path.resolve(process.argv[1] || "") === path.resolve(scriptPath)) {
     { ...validPageTarget, id: "other-page" },
     { ...validPageTarget, id: 123 },
     { ...validPageTarget, type: "other" },
+    { ...validPageTarget, url: "app://-/index.html?initialRoute=%2Favatar-overlay" },
   ];
   if (!valid || browserId !== "test-browser" || !isValidCdpPageTarget(validPageTarget, options.port) ||
       invalidPageTargets.some((item) => isValidCdpPageTarget(item, options.port))) {
@@ -1811,17 +2090,28 @@ if (path.resolve(process.argv[1] || "") === path.resolve(scriptPath)) {
   }
   console.log(JSON.stringify({ pass: true, version: SKIN_VERSION, test: "loopback-cdp-validation" }));
   } else if (options.mode === "check-payload") {
-    const loaded = await loadPayload(options.themeDir);
-    const unresolved = /__DREAM_SKIN_[A-Z0-9_]+_JSON__/.test(loaded.payload);
+    const loaded = await loadPayload(options.themeDir, null, options.windowMaterial);
+    const unresolved = /__(?:DREAM_SKIN|INTERNET_ANGEL_EXTENSION)_[A-Z0-9_]+_JSON__/.test(
+      loaded.payload,
+    );
     if (unresolved) {
       throw new Error("Payload placeholders were not fully replaced");
     }
     console.log(JSON.stringify({
       pass: true,
       version: SKIN_VERSION,
+      internetAngelExtension: loaded.internetAngelExtension,
+      internetAngelClassifier: loaded.internetAngelClassifier,
+      acrylicOverlay: loaded.acrylicOverlay,
+      windowMaterial: loaded.windowMaterial,
       payloadBytes: Buffer.byteLength(loaded.payload),
       themeId: loaded.theme.id,
       appearance: loaded.theme.appearance,
+      colorMode: loaded.theme.colorMode,
+      explicitColorKeys: loaded.theme.explicitColorKeys,
+      accent: loaded.theme.colors?.accent ?? null,
+      hasColors: !!loaded.theme.colors && typeof loaded.theme.colors === "object",
+      hasPalette: Object.hasOwn(loaded.theme, "palette"),
       art: loaded.theme.art,
       artMetadata: loaded.theme.artMetadata ?? null,
       safeCssStatus: loaded.safeCssStatus,

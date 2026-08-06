@@ -1,5 +1,398 @@
 # Task Progress
 
+Updated: 2026-08-05 CST (Asia/Shanghai)
+
+## Codex 26.730 generic composer fix
+
+- [diagnosed] Codex `26.730.7989.0` replaced `.composer-surface-chrome` with
+  the CSS Modules class `_ComposerLayoutFooter_*`, so the older Windows
+  renderer stopped theming the composer/dialog input.
+- [complete] Merged the upstream v1.5.12 generic renderer fallback and repaired
+  the Windows renderer: it now exposes `missingL1` in its runtime scope,
+  reclassifies when a generic composer mounts, and re-runs part refresh after
+  every ensure so a composer mounted during classification is not missed.
+- [verified] Live CDP on Codex 26.730 reports
+  `data-ds-part="composer"` on `_ComposerLayoutFooter_yeer6_335`;
+  `verify-dream-skin.ps1` passes with `genericInput` visible, engine version
+  `1.5.12`, revision `7fab22fba48bb00ee568`, and no hidden-document failure.
+
+## Codex 26.730 wallpaper and generic composer CSS
+
+- [diagnosed] The v1.5.12 Windows CSS only themed `.composer-surface-chrome`,
+  which Codex 26.730 no longer renders, and task-route `main` was opaque
+  `--dream-surface`, hiding the 超天酱 body wallpaper behind a purple surface.
+- [complete] Windows `dream-skin.css` now styles `[data-ds-part="composer"]`
+  with the Internet Angel input surface, and keeps task-route `main` and its
+  `::after` overlay translucent so the body wallpaper remains visible.
+- [verified] Live computed styles show the 超天酱 blob image on `body`,
+  semi-transparent task `main` gradient, and a themed generic composer;
+  `verify-dream-skin.ps1` passes with `genericInput` visible.
+
+## Codex 26.730 side chat, project preview, and persistent composer
+
+- [diagnosed] The right sidebar and side-chat composer kept native black
+  `bg-token-main-surface-primary`, the side composer was outside the main
+  surface and never got `data-ds-part="composer"`, and switching conversations
+  mounted a new composer that was not reclassified until a manual refresh.
+- [complete] The Windows renderer now marks the outermost generic composer
+  container, accepts side-chat composers inside `aside`, re-establishes the
+  part on every mutation batch, and schedules a fast refresh when the user
+  clicks inside any sidebar. Windows CSS now themes the right sidebar and its
+  inner token surfaces instead of leaving them black.
+- [verified] Live CDP: switching between conversations and back keeps
+  `data-ds-part="composer"` on `_ComposerLayoutRoot_yeer6_3` within ~900ms;
+  the right sidebar background is themed and its `bg-token-main-surface-primary`
+  children are transparent.
+- [complete] Built `release/CodexDreamSkin-Setup-v1.5.12.exe` and
+  `release/CodexDreamSkin-QuickFix-v1.5.12.zip`; the quick-fix package contains
+  a runnable `fix.ps1` plus the patched renderer/css/launcher files.
+- [complete] Follow-up: broadened generic composer input discovery, removed
+  nested inner frames inside generic/side-chat composers, and neutralized
+  native black project/diff surfaces in the right sidebar. Live CDP reports no
+  `rgb(0,0,0)`/`rgb(24,24,24)` surfaces in the right sidebar after the fix.
+- [complete] Second follow-up: `scroll-mt-4` message wrappers that carry
+  `data-message-author-role`/conversation anchors are now transparent and
+  borderless, so the main thread and side chat no longer draw a second frame
+  around the real message bubble; composer fallback also marks
+  `ComposerLayoutRoot` directly when no input is detected.
+- [complete] Third follow-up: right-sidebar/diff theming no longer depends on
+  being inside the main surface, so project previews rendered in any non-left
+  `aside` (outside dialogs) are themed instead of black.
+- [complete] Fourth follow-up: `dream-terminal-panel` (the right side chat /
+  terminal surface) is now translucent and borderless, and is included in the
+  generic composer fallback so its bottom input is no longer a separate black
+  frame.
+- [complete] Fifth follow-up: the generic composer classifier now marks every
+  `ComposerLayoutRoot`, not just the first one, so the main input and the side
+  chat input both keep `data-ds-part="composer"` after conversation switches.
+  The Windows CSS also themes the second composer before the renderer refresh.
+- [complete] Sixth follow-up: Projects, pull requests and other full-route
+  pages mount an opaque native `bg-token-main-surface-primary` frame inside the
+  main content viewport. Windows CSS now paints that frame, its sticky header,
+  search input and input placeholder with adaptive Dream Skin surfaces, so the
+  wallpaper remains visible in both dark and light modes.
+- [complete] Seventh follow-up: the right-side source-code viewer is a
+  shadow-DOM `diffs-container` with an opaque native black surface. The
+  renderer now themes its host, file, code, gutter and line-number surfaces
+  with inline styles plus a small shadow style for scrollbars and selection,
+  so source files follow the active Dream Skin theme in dark and light modes.
+- [complete] Eighth follow-up: light mode no longer leaves native dark
+  surfaces behind. Windows CSS now themes route frames, the new-chat composer
+  body, dialog/Radix overlays, user/assistant bubbles, edited-card badges and
+  file rows, environment panels, the left sidebar surface/rows/icons, source
+  tooltips, and the scroll-to-bottom hover state with adaptive Dream colors.
+  Appearance detection also prefers root classes and light before data
+  attributes, so stale debug attributes cannot force light mode back to dark.
+- [verified] Live CDP after hot injection: side chat composer is marked
+  `data-ds-part="composer"`, the Projects page surface is a translucent theme
+  gradient instead of `rgb(24,24,24)`, and the source-code viewer background is
+  themed instead of `rgb(17,17,17)`; `verify-dream-skin.ps1` passes with
+  `pass: true`, and the full Windows test suite passes.
+- [complete] `patch-dream-skin.ps1` now requires the new renderer/CSS markers
+  before reporting "already contains fixes", so an older installed engine is
+  upgraded in place to this revision. Rebuilt
+  `release/CodexDreamSkin-QuickFix-v1.5.12.zip`
+  (`32691827C1127A1716201B17004B7308630515D60E9480443711A22A0B224162`) and
+  `release/CodexDreamSkin-Setup-v1.5.12.exe`
+  (`F4ABD8B32448FA1CF77A4FB57F03A498CD08C8A60526837FC4797453E7266D16`).
+
+## Sync latest upstream and publish fork v1.5.12
+
+- [goal] Merge `upstream/main` at `0a727a539fc9cd298ad4827c6cefbd4a2192db79` into the fork, resolve conflicts in favor of this repository's INTERNET ANGEL, Linux, floating-sidebar, Windows Acrylic and exact-process/HWND architecture, then publish a verified `v1.5.12` Release.
+- [workspace] Isolated worktree `F:\Codex-Dream-Skin-Needy-Girl-Overdose-release-v1.5.12` on branch `agent/sync-upstream-release-v1.5.12`; the original dirty worktree and its unrelated changes remain untouched.
+- [upstream] Initial fixed merge inputs were fork `origin/main` at `26245e173220969259ce696b07f1052a0aeca70f` and upstream `main` at `1c7a859ed51bcfe4923f6483a5625a6e63f97657`. Before CI repair, upstream advanced by two documentation commits to `0a727a539fc9cd298ad4827c6cefbd4a2192db79`; merge commit `2f176a0` records that ancestry. Per user direction, follow-up `37b0627` restores both READMEs and all affected gallery image assets byte-for-byte to this fork's pre-merge state, so no upstream showcase content enters the published tree.
+- [complete] All 33 textual conflicts were resolved without residual conflict markers. The merge retains fork product behavior while integrating upstream Safe CSS runtime compilation, transactional theme replacement recovery, generic renderer fallbacks, Codex 26.727 Settings detection, multiline TOML coverage and immutable Release SHA binding.
+- [release] Target version is `1.5.12`; no origin tag or Release with that version existed at preflight. Six guarded macOS/Windows version sources and three fork Linux version sources are synchronized.
+- [verified] Shared runtime sync, selector doctor, three-platform payload checks, all 24 Windows Node tests, Windows PowerShell 5.1 and PowerShell 7 full regressions, and installer static tests under both PowerShell hosts pass. Release workflow immutable-SHA and retry binding tests pass.
+- [environment] Windows cannot execute the macOS publish/stage tests that require POSIX directory fsync, symlinks and `/bin/bash`; WSL has no installed distribution. Swift and Inno Setup are also unavailable locally. Ubuntu, Windows and macOS CI must provide these filesystem, native build, DMG and Setup.exe results.
+- [github] Fine-grained PAT permissions were corrected; branch `agent/sync-upstream-release-v1.5.12` was pushed and draft PR #20 was opened against `main`: `https://github.com/EmiyaKatuz/Codex-Dream-Skin-Needy-Girl-Overdose/pull/20`.
+- [ci] PR #20 is mergeable. Run `30968153557` passed Static checks, Windows PowerShell 5.1 and macOS repository regressions. Windows PowerShell 7 failed only because the child operation-lock contention probe exceeded its 10-second process-start deadline; the product mutex uses a zero-millisecond second-owner timeout and behaved fail closed.
+- [verified] The production mutex remains unchanged. The child probe now runs non-interactively, allows 30 seconds for runner process startup, and explicitly waits for exact-process termination after a timeout kill. The focused auto-launch safety test passes under Windows PowerShell 5.1 and PowerShell 7.
+- [pending] Push the upstream merge and CI test correction, require all four PR checks on the exact new head, mark the PR ready, merge it, then verify the public Release plus DMG, Setup.exe and `SHA256SUMS.txt` downloads.
+
+## Windows stale CDP listener recovery
+
+- [diagnosed] Codex auto-restart can leave the old CDP listener on `9335`
+  owned by a process that no longer exists, so the next reapply fails and
+  Codex is reopened without the debug endpoint.
+- [complete] The launcher now detects stale dead-owner listeners and scans to
+  the next free loopback port even when `-Port` was explicit; live unverified
+  listeners still fail closed.
+- [verified] The Windows PowerShell suite, installer static checks, Node
+  regressions and payload validation pass. On the affected machine the stale
+  `9335` listener resolves to the next free port `9336`.
+
+## In-place runtime patch
+
+- [complete] Added `windows/scripts/patch-dream-skin.ps1` so existing
+  installations can be fixed without uninstalling or reinstalling. It stages
+  and hash-verifies the affected launcher scripts plus the patch script
+  itself, backs up the originals, replaces them in the installed engine,
+  verifies the result, and preserves themes, config backups, tray settings,
+  and the running Codex session.
+- [verified] The patch ran against the real installed engine on this machine:
+  installed launcher files and the patch script now match the source hashes,
+  active theme and config backup remain present, Codex stayed running, and no
+  patch transaction directories remain.
+- [verified] Runtime-patch regression, stale-listener regression, installer
+  static checks, and the full Windows PowerShell suite pass.
+
+Updated: 2026-08-02 CST (Asia/Shanghai)
+
+## macOS DMG build from MacOS-Fix
+
+- [scope] Build a local macOS DMG containing the current uncommitted ChatGPT
+  26.727 selector and injection-verification fix. Do not commit, push, tag,
+  publish, or replace a GitHub Release.
+- [complete] Ran the repository's `macos/scripts/build-dmg.sh` flow, including
+  the full macOS test suite, universal app build, ad-hoc signing, read-only DMG
+  mount, packaged-runtime checks and SHA-256 generation.
+- [target] `macos/release/CodexDreamSkin-v1.5.9.dmg` and its adjacent
+  `.dmg.sha256` checksum file.
+- [verified] The 8.4 MiB DMG passed the build script's mounted-app validation
+  and a separate `hdiutil verify`. Its independently recomputed SHA-256 matches
+  the sidecar: `926d11498a5ce450c7879cd4eb68a1fdc3af60df9378beee6572546fd8bb7608`.
+- [not published] The artifact remains local. No commit, push, PR, tag, GitHub
+  Release, or replacement of an existing public asset was performed.
+
+Updated: 2026-08-01 CST (Asia/Shanghai)
+
+## macOS ChatGPT 26.727 apply verification failure
+
+- [scope] macOS only. Preserve Windows/Linux behavior and shared runtime files
+  unless a shared-source sync check proves a generated macOS asset requires it.
+- [diagnosed] The installed 1.5.9 payload and exact Internet Angel theme revision
+  reach the visible ChatGPT renderer, the active PNG exists, and the themed home,
+  sidebar, composer and four-card deck are present. Apply still fails because the
+  outer startup verifier rejects the current ChatGPT 26.727 home DOM after
+  `main.main-surface` and `header.app-header-tint` disappeared; live evidence has
+  `scope.level=L0`, a visible home hero and sidebar, but `shell=null`.
+- [diagnosed] The apparent purple full-area mask was the flat themed surface left
+  after all artwork rules missed the renamed main shell; the operation host itself
+  is transparent outside its small status card. The image payload was valid and
+  already present as a renderer Blob URL, but no current main element matched the
+  CSS gate that paints it.
+- [complete] Extended the canonical selector contract with the stable ChatGPT
+  26.727 `data-app-shell-main-surface` and
+  `data-app-shell-application-menu-bar` attributes while retaining the legacy
+  classes. Synced the generated macOS CSS/renderer/selector assets and the shared
+  Internet Angel extension copies used by the platform packages.
+- [complete] Kept exact payload, revision, window, viewport, structure, overflow
+  and Angel surface checks, but allowed Internet Angel's intentional cyan/green/
+  yellow/pink card labels. Ordinary themes still require their existing label
+  color match.
+- [verified] Focused macOS and generated-asset regressions pass; affected Windows
+  Node compatibility tests also pass. `CODEX_DREAM_SKIN_SKIP_DOCTOR=1
+  macos/tests/run-tests.sh` passes in full, including shell syntax, runtime sync,
+  payload and preset checks, Safe CSS/ZIP/import tests, Swift build and XCTest
+  10/10. `git diff --check` passes.
+- [verified live] The fixed injector applied to the real ChatGPT 26.727.51351
+  renderer on loopback port 9341. Exact installed-engine verification reports
+  `pass=true`, `scope.level=L1`, no missing L1 selectors, matching theme revision,
+  visible composer/sidebar/environment, and no horizontal overflow. The captured
+  installed screenshot is `/tmp/dreamskin-installed-after-fix.png`; the artwork is
+  visible and the loading mask is absent.
+- [installed locally] Rebuilt and ad-hoc signed the universal menu-bar App, then
+  atomically replaced `/Applications/Codex Dream Skin.app` and the installed
+  engine without closing or restarting ChatGPT. The watcher is active and the
+  previous App/engine remain recoverable at
+  `/tmp/codex-dream-skin-before-fix.clZViv`.
+- [not published] Changes remain uncommitted on local branch `MacOS-Fix`; no push,
+  PR, merge, tag, Release, DMG publication, or user-downloadable update occurred.
+
+Updated: 2026-07-31 CST (Asia/Shanghai)
+
+## Final payload CSS pre-PR blocker
+
+- [diagnosed] A final production-payload audit found that the Windows and Linux
+  renderer templates consume only `__DREAM_CSS_JSON__`, while their injectors
+  replace that effective placeholder with `baseCss`. The computed Internet
+  Angel extension CSS is therefore absent from both final renderer payloads;
+  validated Windows Safe CSS is absent for the same reason.
+- [complete] Added direct final-IIFE CSS argument regressions for the shared
+  Internet Angel extension and Windows Safe CSS, then replaced the effective
+  placeholder with `combinedCss` on Windows and `css` on Linux.
+- [complete] Reused the existing Windows/Linux fixed-sidebar descendant rules
+  for the floating panel through an equal-specificity `:is()` parent. Fixed
+  container paint, geometry and ornament ownership remain unchanged.
+- [verified] Focused red-green tests prove the extension and Safe CSS reach the
+  final renderer IIFE. A Chromium computed-style fixture reports parity for
+  navigation, buttons, new-task, section, selected-row and list-item styles on
+  both platforms; only the intentional floating-container paint/geometry differs.
+- [verified] Platform payload checks, runtime synchronization, JavaScript
+  syntax and `git diff --check` pass. Portable Windows Node coverage passes
+  21/21; the complete macOS suite passes, including Swift XCTest 10/10.
+- [complete] Committed the final payload/parity correction on the feature branch.
+- [complete] Pushed the feature branch to the `Maker-Wen` fork and opened
+  `EmiyaKatuz/Codex-Dream-Skin-Needy-Girl-Overdose#13` against `main`.
+- [pending] PR CI and review. Windows PowerShell and real Windows/Linux visual
+  smoke remain CI/platform evidence gaps already accepted for this change.
+
+Updated: 2026-07-31 CST (Asia/Shanghai)
+
+## Cross-platform floating-sidebar contract follow-up
+
+- [complete] User expanded the scope beyond the macOS bundled preset: the
+  fixed/floating Internet Angel sidebar must work on Windows and Linux too, and
+  platforms that support imported Safe CSS must expose both sidebar variants as
+  the same public `sidebar` part. Linux does not currently import theme ZIPs or
+  Safe CSS, so this task will not add a new Linux theme-store subsystem.
+- [complete] Added the optional floating-panel selector to the shared contract;
+  canonical macOS and Windows now expose fixed and floating panels through the
+  same Safe CSS `sidebar` part. Windows refreshes that part immediately when a
+  floating portal is added or removed instead of waiting for its fallback scan.
+- [complete] Windows and Linux now set the shared extension's root theme gate
+  only for the two exact bundled Internet Angel IDs, set `standard` for every
+  other theme, and remove the gate during cleanup. The existing broad art-profile
+  heuristic is not reused for theme activation.
+- [complete] The shared classifier now visits every matching sidebar, covering
+  the native transition where fixed and floating panels briefly coexist.
+- [verified] Red tests reproduced all three gaps: dynamic canonical Safe CSS
+  part assignment, Windows floating Safe CSS assignment, and simultaneous
+  sidebar classification. Focused macOS, Windows and shared tests now pass;
+  the Windows VM fixture also executes the Linux renderer for exact-ID,
+  non-bundled-ID and cleanup behavior. Shared synchronization, JavaScript syntax
+  and `git diff --check` pass.
+- [verified] The complete macOS suite passes, including Swift build/XCTest
+  10/10, shared runtime, Safe CSS, ZIP/import, shell and Doctor coverage. All
+  portable Windows Node tests pass, including renderer, bootstrap, session,
+  one-shot, window readiness, payload integrity and injector self-checks; Linux
+  syntax and payload construction pass. The independent final review found no
+  Critical or Important issues.
+- [blocked] This macOS host has neither `pwsh` nor Windows PowerShell, so the
+  Windows PowerShell suite must run in CI. Real Windows/Linux Codex screenshot
+  smoke is also unavailable locally; these platform evidence gaps remain open
+  even though the executable renderer and payload contracts pass.
+- [complete] Committed the reviewed P1/P2 follow-up on
+  `codex/fix-internet-angel-hover-sidebar`.
+- [blocked] Push and PR creation remain blocked by GitHub authentication:
+  `gh auth status` reports the active token for `Maker-Wen` as invalid, and an
+  HTTPS push cannot read a username. Re-authenticate, then push this branch and
+  open the PR without changing the verified implementation.
+
+Updated: 2026-07-31 CST (Asia/Shanghai)
+
+## Internet Angel hover-sidebar pre-PR review follow-up
+
+- [scoped] The review's Safe CSS finding affects imported themes that target
+  `[data-ds-part="sidebar"]`; it does not affect the bundled Internet Angel
+  sidebar, which uses the separate `data-angel-component` classifier verified
+  live in this task. The current PR remains scoped to the macOS bundled theme.
+- [complete] Reworked the macOS lifecycle fixture to model fixed-sidebar
+  removal, an empty refresh interval, and a later floating portal mount as two
+  body mutations. The floating node now has its own mode, search, new-task,
+  section, selected-row, profile and help controls, and disconnected nodes no
+  longer appear in document queries or cleanup assertions.
+- [verified] The focused test first failed on an unclassified floating mode
+  control, then passed after the fixture gained real floating descendants. The
+  complete macOS suite passes with Swift XCTest 10/10 plus shared runtime,
+  payload, Safe CSS, ZIP/import, shell and runtime-state coverage; Doctor was
+  skipped because this follow-up changes only the test fixture.
+
+Updated: 2026-07-30 CST (Asia/Shanghai)
+
+## Internet Angel hover-sidebar theme repair
+
+- [diagnosed] Branch `codex/fix-internet-angel-hover-sidebar`. Fixed expansion
+  uses `aside.app-shell-left-panel` and was already themed. Collapsing it creates
+  a different native node, `[data-testid="app-shell-floating-left-panel"]`,
+  whose computed background remained the native `rgb(24, 24, 24)` because the
+  Internet Angel lifecycle did not classify it.
+- [complete] Reused the stable native test ID in the existing sidebar selector,
+  so fixed and floating sidebars enter the same component lifecycle. The shared
+  runtime generated identical extension assets for macOS, Windows and Linux.
+- [verified] A red-green lifecycle fixture now models the floating node. Live
+  CDP collapse/left-edge-hover reproduction confirms the floating node receives
+  `data-angel-component="sidebar"` and the Internet Angel scanline/blue-purple
+  gradient, blue border and cyan/pink shadow instead of the native black plate.
+- [complete] A follow-up experiment made floating and fixed wide-art backgrounds
+  numerically identical, but user visual review found that this suppressed the
+  floating panel's Internet Angel scanlines, blue-purple surface and neon edge.
+  Live same-window comparison then proved why equal transparency still looked
+  different: the fixed panel reveals the body artwork, while the floating panel
+  overlays an already shaded main surface and becomes doubly dark. Moving the
+  fixed ornament layer also overlapped the floating search/footer layout.
+- [verified] Fixed-sidebar selectors and ornament ownership remain unchanged.
+  Internet Angel floating-only paint now draws the preset's 16:9 artwork in
+  viewport cover coordinates behind the same immersive gradient, and reuses only
+  layout-safe section/list ornaments. Live computed style reports a viewport
+  layer of `1779.56px 1001px` at `-51.56px 0`, `sidebar` classification, heart
+  section ornaments, no migrated fixed ornament node and no temporary style.
+- [verified] Shared synchronization, Internet Angel parity, macOS and Windows
+  payload checks, JavaScript syntax and `git diff --check` pass. The complete
+  macOS suite exits 0 with Swift XCTest 10/10 plus renderer, Safe CSS,
+  ZIP/import, shell and runtime-state coverage; Doctor was explicitly skipped
+  because live CDP evidence was collected separately in this task.
+- [complete] Implementation commit created on the feature branch. No merge,
+  version bump, tag, Release, or published client asset has been created.
+- [diagnosed] The floating panel's `Codex` mode switch still inherits the
+  native near-white text color. Live CDP comparison shows the fixed switch is
+  transparent too, but receives `var(--ds-accent)` and its suffix from a base
+  CSS rule scoped only to `__DREAM_SELECTOR_LEFT_PANEL__`. The floating panel
+  uses the same button contract under a different parent and misses that rule.
+- [complete] Focused red-green CSS contracts now reuse the existing mode-switch,
+  specific muted-placeholder and Internet Angel corner declarations for both
+  sidebar parents without changing any fixed-sidebar values.
+- [verified] After hot injection, fixed and floating `Codex` controls report
+  identical computed text/background/border/radius/font/suffix/icon values;
+  the focused Internet Angel macOS regression passes.
+- [verified] Runtime synchronization, macOS and Windows payload checks and
+  `git diff --check` pass. The complete macOS suite exits 0 with Swift XCTest
+  10/10 plus renderer, Safe CSS, ZIP/import, shell and runtime-state coverage;
+  Doctor was explicitly skipped because live CDP evidence was collected here.
+- [blocked] Push and PR creation remain pending: `gh auth status` reports the
+  active GitHub token invalid, and HTTPS `git push` cannot obtain a username.
+  Re-authenticate GitHub, then push this branch and open the PR without changing
+  the verified commit contents.
+- [diagnosed] A semantic live-CDP audit paired 60 fixed/floating sidebar control
+  types and found 89 computed-style differences. Almost all are descendant SVG
+  colors; the remaining visible differences are foreground text and selected-row
+  paint. Their declarations are still scoped only to the fixed sidebar even
+  though both panels now share the same component lifecycle.
+- [complete] Shared only the existing sidebar descendant/control visual
+  selectors with the floating panel: text and SVG colors, transitions, hover
+  paint, base selected rows, and the Internet Angel selected-row plate/icon.
+  Fixed container background, layering, wide-art surface and ornament ownership
+  remain unchanged.
+- [verified] Focused red-green contracts cover every shared declaration. After
+  hot injection, a live semantic CDP comparison reports identical search and
+  help control/SVG colors, borders, radii and effects in fixed and floating
+  panels; the fixed SVG tint remains `rgba(175, 174, 178, 0.96)`. A source-scope
+  audit found no remaining fixed-only descendant color, hover or selected-state
+  rules.
+- [verified] Runtime synchronization, macOS and Windows payload integrity, and
+  `git diff --check` pass. The complete macOS suite exits 0 with Swift XCTest
+  10/10 plus renderer, Safe CSS, ZIP/import, shell and runtime-state coverage;
+  Doctor was explicitly skipped because live CDP evidence was collected here.
+
+Updated: 2026-07-28 CST (Asia/Taipei)
+
+## Windows native-window fallback hardening (PR #10)
+
+- [complete] Merged child-fork `main@32ce20b` into
+  `codex/fix-windows-crash-lag` with merge commit `e56f1c0`; the public branch
+  history was preserved and the two conflicts were resolved against the
+  current readiness-test baseline.
+- [complete] Repositioned PR #10 as a safety follow-up to merged PR #9. Removed
+  the redundant startup-level rendered-skin fallback and its ineffective
+  fixture, plus the abandoned payload-template and compositor-CSS tests. The
+  final diff contains no startup or visual/CSS changes, and sidebar lag remains
+  a separate unresolved issue.
+- [complete] Restricted `-32000` fallback to the exact known window-not-found
+  messages from `Browser.getWindowForTarget`. Generic `-32000` failures remain
+  fail-closed, and every `Browser.getWindowBounds` error now reports
+  `window-bounds-unavailable` without falling back to renderer evidence.
+- [complete] `verify-dream-skin.ps1` now imports `theme-windows.ps1` exactly once
+  before calling `Get-DreamSkinThemePaths`; the Windows suite pins this import
+  contract.
+- [verified] Focused native-window readiness tests pass 10/10, all portable
+  Windows Node tests pass 16/16, injector self-test and payload validation pass,
+  the complete Windows PowerShell 5.1 suite passes, and `git diff --check`
+  passes.
+- [pending] Commit and push the hardening diff, update PR metadata and outdated
+  review threads, then require Static checks, PowerShell 5.1, PowerShell 7 and
+  macOS repository regressions to pass on the exact pushed head.
+
 ## Windows stability repair (2026-07-27)
 
 - [diagnosed] The reported approximately two-minute "crash" is the startup
@@ -19,9 +412,203 @@
 - [verified] Windows injector/renderer syntax, exact payload construction,
   window-readiness, session, bootstrap, one-shot and renderer fixtures pass.
   `git diff --check` passes.
+Updated: 2026-07-26 23:10 HKT (Asia/Hong_Kong)
+
+## Windows Chrome/150 Native-Window Compatibility Backport
+
+- [complete] Reproduced the v1.5.7 rollback on Microsoft Store
+  `OpenAI.Codex_26.721.4979.0_x64`: the renderer and theme verified except for
+  `Browser.getWindowForTarget`, which returned exact CDP error
+  `-32000 Browser window not found` on both the page and browser WebSockets.
+- [complete] Confirmed upstream already fixed the same root cause in
+  `Fei-Away/Codex-Dream-Skin#265` (`e54703d`) and documented it in issue
+  `Fei-Away/Codex-Dream-Skin#267`; the public child-fork v1.5.7 predates that
+  upstream merge.
+- [complete] Branch `fix/windows-cdp-window-not-found` backports the focused
+  Windows classifier/fallback and regression coverage onto child-fork
+  `main@78497ca` without importing unrelated macOS, CI or release changes.
+- [verified] Focused readiness/one-shot/bootstrap Node tests pass 11/11; the
+  complete Windows PowerShell regression suite passes; Node syntax,
+  `--check-payload`, and `git diff --check` pass.
+- [verified] The exact branch injector ran live against Store Codex
+  `26.721.4979.0`: it classified the real `-32000` reply as
+  `browser-window-not-found`, reported `fallbackWindowPass=true`, and exited 0
+  with `result.pass=true`.
+- [complete] Commit `8f9fa54` was pushed to
+  `Rhongomiant1227:fix/windows-cdp-window-not-found`; child-fork PR #9 merged as
+  `32ce20b` with explicit attribution to upstream #265 and environment/test
+  evidence.
+- [complete] Added independent Codex `26.721.4979.0` / raw `-32000` evidence
+  to upstream issue #267 in comment `#issuecomment-5084191931`; no duplicate
+  upstream PR was opened because the fix is already merged there.
+- [complete] PR #9 is merged into the child fork. Its fallback is now the base
+  behavior hardened by PR #10; it is not separately released yet.
 
 Updated: 2026-07-25 08:31 HKT (Asia/Hong_Kong)
+Updated: 2026-07-27 10:32 CST (Asia/Shanghai)
 
+## macOS Internet Angel Interaction Regression Fix (2026-07-27 09:34 CST)
+
+- [verified] Work continues on `codex/macos-internet-angel-parity` and ready
+  PR #8. The worktree was clean at `d4d9be8` before this follow-up. Scope is
+  restricted to the two exact bundled Internet Angel preset IDs; Gothic and
+  imported themes must remain unaffected.
+- [verified] Real CDP pointer input reproduces the auxiliary workspace failure.
+  The Browser tab becomes selected, but the themed workspace root collapses
+  from `991px` to `86px` and its tab panel from `945px` to `40px`. Clicking an
+  Edited files row selects Review, but the broken root expands the Review panel
+  to `16807px`, removes its bounded scroll container and prevents native file
+  positioning from being visible.
+- [verified] Temporarily restoring the workspace root's native
+  `position: absolute` returns the root to `991px`, Browser/Review to `945px`
+  and Review to a bounded `905px` scroll viewport. The cause is the macOS
+  overlay marking multiple nested workspace candidates and forcing
+  `position: relative !important`; it is not a browser network/load failure.
+- [verified] The sidebar scroll root remains `871px` high with `2806px` of
+  content. The themed `1px` border reduces each fixed row to a `28px` client
+  box around `29px` of content, producing a nested `1px` vertical scroll range
+  that consumes wheel input. Temporarily clipping row vertical overflow keeps
+  row `scrollTop` at zero and routes wheel input to the native sidebar scroller.
+- [verified] Red-green regressions now require exactly one innermost workspace
+  mark, forbid workspace positioning overrides and positioned decoration, and
+  require fixed-height sidebar rows to clip vertical overflow. The classifier
+  selects only the smallest valid right-docked workspace. The CSS paints its
+  cyan/blue/pink top stripe as a background layer and no longer changes native
+  position, dimensions, overflow or z-index.
+- [verified] Source hot injection and real input checks pass. A first wheel event
+  over a sidebar row moves the native root from `scrollTop=0` to `420` while all
+  rows stay at zero. Opening `Browser` from the right-panel add menu produces a
+  full `945px` `New tab` panel with the native address field and Start browsing
+  surface. Clicking `macos/tests/internet-angel-macos.test.mjs` from Edited
+  files switches from Browser to Review, scrolls Review to `4641`, and leaves
+  the requested file header visible at panel `y=92`.
+- [verified] The targeted native-window screenshot shows the complete Browser
+  surface without clipping, overlap or document overflow. Computer Use refused
+  access to `com.openai.codex` by policy and CDP screenshots block while the
+  embedded browser is open, so the visual capture used macOS window-level
+  `screencapture`; interaction and geometry assertions remain CDP-derived.
+- [verified] `CODEX_DREAM_SKIN_SKIP_DOCTOR=1 macos/tests/run-tests.sh` passes
+  all shell/Node, shared runtime, Safe CSS, import/ZIP and 10 Swift XCTest cases.
+  A temporary arm64 app build passes strict code-signature verification, reports
+  an arm64 Mach-O executable and contains byte-identical overlay CSS/JS assets.
+  `git diff --check` also passes.
+- [verified] Implementation commit `8290ad3` passed the scoped diff review and
+  was pushed to existing ready PR #8. GitHub reports the PR as open and non-draft
+  with exact head `8290ad30b550050346c5b1d151975320db0a14ba`; its merge state is
+  currently `BLOCKED` and no status checks are reported yet. No install, merge,
+  version bump, tag or Release is part of this follow-up.
+
+## macOS Internet Angel Complete Surface Audit (2026-07-27 01:22 CST)
+
+- [verified] Performed a bidirectional parity audit between the Windows
+  renderer/CSS component inventory and the currently open macOS Codex DOM. The
+  scope remains exact Internet Angel preset IDs only; Gothic and imported themes
+  must remain unaffected.
+- [verified] Live CDP evidence reproduces all newly reported gaps. The open
+  Environment flyout contains two native sections, but the macOS classifier marks
+  only the first header/section; the Sources header therefore keeps its native
+  black background. The left sidebar currently has 195 `sidebar-row` marks,
+  including nested folder controls and screen-reader-only buttons, and applies a
+  visible rest-state plate to all of them. Its native inner scroll container is
+  still functional (`clientHeight=871`, `scrollHeight=2161`), so the defect is
+  visual hierarchy loss rather than a broken scrollbar.
+- [verified] Windows has dedicated `changes-pill`, `changes-shell` and
+  `changes-clip-host` classification and CSS for the compact changed-files status;
+  the macOS overlay currently has none of those components. Windows also keeps
+  ordinary sidebar buttons transparent at rest and reserves the full plate for
+  selected rows, unlike the current macOS overlay.
+- [verified] Added red-green DOM/CSS regressions and exact-theme-gated coverage for
+  both Environment/Sources sections, the compact changed-files shell/clip/pill,
+  transparent sidebar rest states, native selected rows, the composer goal-mode
+  trigger and settings app-main controls. A direct Windows-to-macOS component
+  contract now checks the remaining interaction surfaces for classifier and CSS
+  coverage.
+- [verified] A real `920x820` macOS window exposed a second Environment rendering
+  path: a visible Radix popover exists beside the exiting `absolute z-40` portal.
+  The old classifier accepted only the latter and mislabeled the visible panel as
+  `summary-panel`. The classifier now accepts both portal hosts while retaining
+  the existing dual-section, button-count and Git/semantic safety gates. The
+  theme never writes portal position or translation overrides.
+- [verified] Source hot injection and real-window evidence pass at `920x820` and
+  restored `1694x991`. The visible Radix panel is inside `x=542..842`, the restored
+  panel is inside `x=1378..1678`, both Environment/Sources headers are themed,
+  only the active sidebar task has a selection plate, expanded project folders
+  remain transparent, and the composer/changed-files pill/document have no
+  horizontal overflow. The native window was restored to its original bounds.
+- [verified] `CODEX_DREAM_SKIN_SKIP_DOCTOR=1 macos/tests/run-tests.sh`
+  completed with shell/Node syntax checks, shared runtime synchronization,
+  Safe CSS, import/ZIP/runtime coverage and 10 Swift XCTest cases passing; the
+  live Doctor was explicitly skipped. An arm64 menu-bar `.app` built into `/tmp`,
+  passed strict `codesign` verification, reported an arm64 Mach-O executable and
+  contained byte-identical Internet Angel CSS/JS assets.
+- [verified] Final focused Internet Angel regression, both touched Node syntax
+  checks and `git diff --check` pass. The worktree contains only the four intended
+  follow-up files.
+- [verified] Implementation and regressions were committed as `7447acc` and
+  pushed to the existing ready PR #8 branch. This progress-only update records
+  the completed verification and push. No merge, install, version bump or Release
+  was performed.
+
+## macOS Internet Angel Detail Parity Follow-up (2026-07-27 00:18 CST)
+
+- [complete] Re-audited the current macOS renderer against the Windows Internet
+  Angel implementation for Output, expanded Edited files details and the full
+  conversation surface. Scope remains exact-theme-ID gated and must not affect
+  Gothic or imported themes.
+- [verified] Live Codex 26.721.41059 DOM inspection shows the Edited files card
+  shell is classified, but its icon, action group, distinct Undo/Review states,
+  file-list rows and Show-more footer have no component markers. The existing
+  macOS summary fixture is an Environment lookalike, so it does not exercise a
+  real Output panel.
+- [verified] The current renderer no longer exposes `[data-message-author-role]`;
+  user bubbles, assistant responses, message actions, historical activities and
+  streaming activities now use current structural markers. Inline command/output
+  bodies and the right-side Outputs summary receive dedicated theme surfaces.
+- [complete] Expanded Edited files cards now classify and style the icon, action
+  group, distinct Undo/Review buttons, file-list surface, clickable rows, paths,
+  per-file statistics and Show-more footer. The later generic resource-card rule
+  explicitly excludes classified edited cards so it cannot overwrite the
+  dedicated cyan/pink treatment.
+- [verified] Focused red/green regressions, JavaScript syntax, all macOS shell
+  syntax, the complete macOS repository suite and 10 Swift XCTest cases pass.
+  Live Codex checks at 1694x991 and an emulated 900x900 viewport show no horizontal
+  overflow; the card controls and paths remain contained. The current Outputs
+  panel, Edited files details, conversation bubble and computed styles were
+  checked from source-injected screenshots.
+- [verified] A fresh arm64 app build completed. Strict code-signature verification,
+  arm64 Mach-O inspection and byte-for-byte packaged overlay asset comparisons
+  pass. The build was not installed or published.
+- [complete] Follow-up commit `2111c3b` is pushed to the account fork and ready
+  PR #8 now points at that exact implementation. GitHub reports the PR open and
+  `BLOCKED` with no check rollup; CI and maintainer review remain separate gates.
+  No merge, release or install is claimed.
+
+## macOS Internet Angel Visual Parity (2026-07-26 21:48 CST)
+
+- [complete] Branch `codex/macos-internet-angel-parity` adds a macOS-only,
+  exact-theme-ID overlay for both bundled Internet Angel presets. It covers the
+  composer, Environment/Changes, left navigation and footer, Add palette, turn
+  navigation, settings, terminal/summary, selection, edited-file, overlay and
+  subagent surfaces without activating for Gothic or custom themes.
+- [complete] Rebased the implementation onto current `origin/main@78497ca`
+  (v1.5.7). Conflict resolution preserves the current native-window readiness
+  gate, validated Safe CSS composition and current version while adding the
+  Internet Angel surface gate to the final renderer assessment.
+- [verified] Shared runtime synchronization, the complete macOS suite, 10 Swift
+  XCTest cases, signed-runtime checks and live Doctor all pass on the rebased tree.
+  The current Codex 26.721.41059 renderer reports `pass: true` with the composer,
+  Environment, sidebar footer, turn rail and scroll-to-bottom coverage active and
+  no horizontal overflow.
+- [verified] An arm64 `Codex Dream Skin.app` build completed at version 1.5.7.
+  Strict code-signature verification, Mach-O architecture and packaged overlay
+  asset presence all pass. The temporary build was not installed or published.
+- [complete] Commits `88afb57` and `e7bdd80` are pushed to the account fork.
+  Ready PR #8 targets upstream `main@78497ca`:
+  `https://github.com/EmiyaKatuz/Codex-Dream-Skin-Needy-Girl-Overdose/pull/8`.
+- [pending] GitHub checks and maintainer review have not completed. The PR is
+  open and currently reports `BLOCKED` with no check rollup yet; it is not
+  merged or released. No version bump, tag, Release publication or installation
+  is in scope.
 ## v1.5.1 Version Release (2026-07-25 08:28 HKT)
 
 - [complete] Created `codex/release-v1.5.1` from the exact synchronized

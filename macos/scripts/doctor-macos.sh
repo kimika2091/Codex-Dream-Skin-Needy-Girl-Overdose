@@ -16,6 +16,8 @@ require_macos_runtime
 [ -f "$CONFIG_PATH" ] || fail "Codex config not found: $CONFIG_PATH"
 for required in \
   "$PROJECT_ROOT/assets/dream-skin.css" \
+  "$PROJECT_ROOT/assets/internet-angel-extension.css" \
+  "$PROJECT_ROOT/assets/internet-angel-extension.js" \
   "$PROJECT_ROOT/assets/renderer-inject.js" \
   "$PROJECT_ROOT/assets/safe-css-policy.json" \
   "$PROJECT_ROOT/assets/safe-css-validator.mjs" \
@@ -56,6 +58,7 @@ fi
     theme: {
       id: payload.themeId,
       name: payload.themeName,
+      internetAngelExtension: payload.internetAngelExtension,
       imageBytes: payload.imageBytes,
       payloadBytes: payload.payloadBytes,
     },

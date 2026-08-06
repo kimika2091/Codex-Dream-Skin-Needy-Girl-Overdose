@@ -12,6 +12,10 @@ while IFS= read -r file; do /bin/bash -n "$file"; done < <(
 while IFS= read -r file; do "$NODE" --check "$file" >/dev/null; done < <(
   /usr/bin/find "$ROOT/scripts" "$ROOT/assets" "$ROOT/presets" -type f \( -name '*.mjs' -o -name '*.js' \) -print
 )
+# `bash -n` accepts a bare $var abutting full-width CJK punctuation, but the
+# same source aborts at runtime under a UTF-8 locale with `set -u` and masks
+# the real failure behind a bogus "unbound variable" (#251).
+"$NODE" "$ROOT/tests/shell-braced-vars-before-cjk.test.mjs"
 
 if /usr/bin/grep -R -n -E 'dream-skin-skin|DREAM_SKIN_SKIN|1\.0\.0-rc2' \
   "$ROOT/scripts" "$ROOT/assets" >/dev/null; then
@@ -156,6 +160,7 @@ fi
 PROJECT_ROOT="$(cd "$ROOT/.." && pwd -P)"
 "$NODE" "$PROJECT_ROOT/tools/sync-runtime-assets.mjs" --check
 "$NODE" "$PROJECT_ROOT/tools/doctor-selectors.test.mjs"
+"$NODE" "$PROJECT_ROOT/tools/internet-angel-extension.test.mjs"
 if ! /usr/bin/cmp -s "$ROOT/assets/safe-css-policy.json" "$PROJECT_ROOT/windows/assets/safe-css-policy.json" ||
     ! /usr/bin/cmp -s "$ROOT/assets/safe-css-validator.mjs" "$PROJECT_ROOT/windows/assets/safe-css-validator.mjs" ||
     ! /usr/bin/cmp -s "$ROOT/assets/selectors.json" "$PROJECT_ROOT/windows/assets/selectors.json" ||
@@ -179,9 +184,14 @@ if /usr/bin/grep -E -q 'home-suggestion-list-item|\.dream-skin-home|\.dream-home
   printf 'Canonical CSS still contains retired marker classes or fossil selectors.\n' >&2
   exit 1
 fi
+# Nesting :has() inside :has() makes Chromium drop the whole rule, so the CSS
+# still parses but ships as silently dead styling; v1.3.1 lost the full-window
+# home and every task-route ambient background that way (#221).
+"$NODE" "$ROOT/tests/runtime-css-nested-has.test.mjs"
 
 "$NODE" "$ROOT/scripts/injector.mjs" --check-payload >/dev/null
 "$NODE" "$ROOT/tests/image-metadata.test.mjs"
+"$NODE" "$ROOT/tests/internet-angel-macos.test.mjs"
 "$NODE" "$ROOT/tests/injector-bootstrap.test.mjs"
 "$NODE" "$ROOT/tests/injector-session.test.mjs"
 "$NODE" "$ROOT/tests/window-readiness.test.mjs"
@@ -1096,5 +1106,5 @@ else
   DOCTOR_RESULT="passed"
 fi
 
-printf 'PASS: syntax, payload, bundled presets, preset seeding, runtime-state safety, custom-theme, config round-trips, HOME recovery, signature, switch-theme signed runtime %s, runtime-state integration %s, and Doctor %s.\n' \
+printf 'PASS: syntax, CJK-adjacent shell expansions, nested :has() CSS, payload, bundled presets, preset seeding, runtime-state safety, custom-theme, config round-trips, HOME recovery, signature, switch-theme signed runtime %s, runtime-state integration %s, and Doctor %s.\n' \
   "$SWITCH_RUNTIME_RESULT" "$RUNTIME_STATE_RESULT" "$DOCTOR_RESULT"

@@ -12,6 +12,9 @@ release/
 runtime/*
 !runtime/
 !runtime/dream-skin.css
+!runtime/image-metadata.mjs
+!runtime/internet-angel-extension.css
+!runtime/internet-angel-extension.js
 !runtime/renderer-inject.js
 !runtime/safe-css-policy.json
 !runtime/safe-css-validator.mjs

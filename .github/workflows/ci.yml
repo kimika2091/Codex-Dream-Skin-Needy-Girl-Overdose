@@ -18,8 +18,8 @@ jobs:
     name: Static checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -39,7 +39,7 @@ jobs:
           while IFS= read -r file; do
             node --check "$file" >/dev/null
           done < <(
-            find macos windows -type f \( -name '*.mjs' -o -name '*.js' \) -print
+            find linux macos runtime tools windows -type f \( -name '*.mjs' -o -name '*.js' \) -print
           )
 
       - name: Check Windows PowerShell source encoding
@@ -89,6 +89,24 @@ jobs:
             printf 'The macOS runtime must parse state without python3 or eval.\n' >&2
             exit 1
           fi
+          if grep -n -E 'target\.(title|url)' \
+            macos/scripts/injector.mjs windows/scripts/injector.mjs >/dev/null; then
+            printf 'Injector logs and results must not record page titles or URLs; keep only target IDs and structural markers.\n' >&2
+            exit 1
+          fi
+          if grep -n -E '(document\.title|location\.href)' \
+            macos/scripts/injector.mjs windows/scripts/injector.mjs >/dev/null; then
+            printf 'Injector renderer probes must not read the page title or URL back to the host.\n' >&2
+            exit 1
+          fi
+          for injector in macos/scripts/injector.mjs windows/scripts/injector.mjs; do
+            if grep -n -E '\.replace\("__DREAM_SKIN_[A-Z0-9_]+_JSON__", [^(]' \
+              "$injector" >/dev/null; then
+              printf '%s: payload placeholders must use function replacements so a theme name containing $ cannot corrupt the payload.\n' \
+                "$injector" >&2
+              exit 1
+            fi
+          done
 
       - name: Check version consistency
         shell: bash
@@ -126,8 +144,8 @@ jobs:
           - name: PowerShell 7
             executable: pwsh.exe
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -170,8 +188,8 @@ jobs:
     name: macOS repository regressions
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -195,7 +213,7 @@ jobs:
         run: ./macos/scripts/build-dmg.sh --skip-tests
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CodexDreamSkin-dmg
           path: macos/release/*.dmg

@@ -175,15 +175,43 @@ try {
     throw 'Runtime scripts are not unblocked only after staged byte-content verification.'
   }
   foreach ($requiredNodeBehavior in @(
-    '$env:CODEX_DREAM_SKIN_NODE',
     'runtime\node\node.exe',
     'runtime\node\LICENSE',
     '$sourceHasBundledRuntime',
-    'Get-DreamSkinValidatedNodeRuntime'
+    'Get-DreamSkinValidatedNodeRuntime',
+    'Assert-DreamSkinTrustedNodeImage'
   )) {
     if (-not $commonSource.Contains($requiredNodeBehavior)) {
       throw "Bundled Node.js discovery is missing: $requiredNodeBehavior"
     }
+  }
+  # The Node runtime executes every validator we own (Safe CSS, theme package,
+  # image metadata, injector), so its path must not be redirectable by anyone
+  # who can write HKCU\Environment without admin rights.
+  if ($commonSource.Contains('$env:CODEX_DREAM_SKIN_NODE')) {
+    throw 'The Node.js runtime path must not be overridable through an environment variable.'
+  }
+  # A bundled runtime, when present, wins over PATH. The source tree has no
+  # bundled copy, so PATH stays reachable for the suite -- but every candidate,
+  # bundled or not, is funnelled through the same signature gate below.
+  $bundledIndex = $commonSource.IndexOf(
+    'Get-DreamSkinValidatedNodeRuntime -Path $bundledNode', [System.StringComparison]::Ordinal
+  )
+  $pathFallbackIndex = $commonSource.IndexOf(
+    'Get-Command node.exe -ErrorAction SilentlyContinue', [System.StringComparison]::Ordinal
+  )
+  if ($bundledIndex -lt 0 -or $pathFallbackIndex -le $bundledIndex) {
+    throw 'The bundled Node.js runtime must be preferred over whatever PATH resolves to.'
+  }
+  # Authenticity must be proven before the binary runs; `node -p` is execution.
+  $trustIndex = $commonSource.IndexOf(
+    'Assert-DreamSkinTrustedNodeImage -Path $candidate', [System.StringComparison]::Ordinal
+  )
+  $probeIndex = $commonSource.IndexOf(
+    "Invoke-DreamSkinNative -FilePath `$candidate", [System.StringComparison]::Ordinal
+  )
+  if ($trustIndex -lt 0 -or $probeIndex -le $trustIndex) {
+    throw 'The Node.js runtime is executed before its signature is verified.'
   }
   $trayGuardIndex = $installSource.IndexOf('if (Test-DreamSkinTrayActive)', [System.StringComparison]::Ordinal)
   $engineInstallIndex = $installSource.IndexOf('$engine = Install-DreamSkinRuntimeEngine', [System.StringComparison]::Ordinal)
@@ -516,14 +544,16 @@ try {
   $multilineArrayPath = Join-Path $temporaryRoot 'config-multiline-arrays.toml'
   $multilineArrayBackup = Join-Path $temporaryRoot 'config-multiline-arrays.before.toml'
   $multilineArrayOriginal = @'
+model = "gpt-5"
 features = [
   "hash # stays inside the string",
+  "brackets [stay] inside the string", # ignored comment brackets []
   "[desktop]",
   ["nested", "array"],
 ]
 
 [desktop]
-rows = [
+layout = [
   ["one", "two"],
   ["three", "[mcp_servers.example]"],
 ]
@@ -538,12 +568,14 @@ args = [
 ]
 '@
   [System.IO.File]::WriteAllText($multilineArrayPath, $multilineArrayOriginal, $utf8NoBom)
-  Install-DreamSkinBaseTheme -ConfigPath $multilineArrayPath -BackupPath $multilineArrayBackup
+  Install-DreamSkinBaseTheme -ConfigPath $multilineArrayPath -BackupPath $multilineArrayBackup -AppearanceTheme 'dark'
   $multilineArrayInstalled = Read-DreamSkinUtf8File -Path $multilineArrayPath
   $multilineArrayDesktop = Get-DreamSkinDesktopSection -Content $multilineArrayInstalled
   if (-not $multilineArrayInstalled.Contains('"[desktop]"') -or
+    -not $multilineArrayInstalled.Contains('"brackets [stay] inside the string"') -or
     -not $multilineArrayInstalled.Contains('"value#with-hash"') -or
     -not $multilineArrayDesktop.Body.Contains('["three", "[mcp_servers.example]"]') -or
+    -not $multilineArrayDesktop.Body.Contains('appearanceTheme = "dark"') -or
     -not $multilineArrayDesktop.Body.Contains('appearanceLightCodeThemeId = "codex"') -or
     -not $multilineArrayDesktop.Body.Contains('keepMe = true')) {
     throw 'Install did not preserve safe multiline arrays across TOML table boundaries.'
@@ -566,7 +598,9 @@ args = [
     "note = `"`"`"fake`r`n[desktop]`r`nappearanceTheme = `"dark`"`r`n`"`"`"",
     "[desktop]`r`nappearanceTheme = [`r`n  `"light`"`r`n]",
     "features = [`r`n  `"one`"`r`n",
-    "features = ]`r`n"
+    "features = ]`r`n",
+    "features = ]`r`n`r`n[desktop]`r`nappearanceTheme = `"system`"",
+    "features = [`r`n  `"one`"`r`n`r`n[desktop]`r`nappearanceTheme = `"system`""
   )) {
     $unsupportedPath = Join-Path $temporaryRoot ("unsupported-$([guid]::NewGuid().ToString('N')).toml")
     $unsupportedBackup = "$unsupportedPath.before"
@@ -668,10 +702,23 @@ args = [
     [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://codex/'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/browser/page-123' },
     [pscustomobject]@{ id = 'other-page'; type = 'page'; url = 'app://codex/'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
     [pscustomobject]@{ id = 123; type = 'page'; url = 'app://codex/'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/123' },
-    [pscustomobject]@{ id = 'page-123'; type = 'other'; url = 'app://codex/'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' }
+    [pscustomobject]@{ id = 'page-123'; type = 'other'; url = 'app://codex/'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?initialRoute=%2Favatar-overlay'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?initial%52oute=%2Favatar-overlay'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?initialRoute=%2Favatar-overlay&initialRoute=%2Fhome'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' }
   )) {
     if (Test-DreamSkinCdpPageTarget -Target $unsafePageTarget -Port 9335) {
       throw 'Accepted an inconsistent CDP page target.'
+    }
+  }
+  foreach ($safeQueryPageTarget in @(
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?next=%2Fhome%26initialRoute%3D%2Favatar-overlay'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?initialRoute=%2Fhome%26initialRoute%3D%2Favatar-overlay'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?initialRoute=%2Fhome&initialRoute=%2Favatar-overlay'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' },
+    [pscustomobject]@{ id = 'page-123'; type = 'page'; url = 'app://-/index.html?InitialRoute=%2Favatar-overlay'; webSocketDebuggerUrl = 'ws://127.0.0.1:9335/devtools/page/page-123' }
+  )) {
+    if (-not (Test-DreamSkinCdpPageTarget -Target $safeQueryPageTarget -Port 9335)) {
+      throw 'Rejected a valid CDP page target because query parsing diverged from URLSearchParams.get().'
     }
   }
   $watchCommand = '"C:\Program Files\nodejs\node.exe" "C:\Dream Skin\injector.mjs" --watch --port 9335 --browser-id browser-123'
@@ -1027,6 +1074,7 @@ args = [
     $updatedTheme.Theme.id -cne 'custom' -or
     $updatedTheme.Theme.art.safeArea -cne 'auto' -or
     $updatedTheme.Theme.art.taskMode -cne 'auto' -or
+    $updatedTheme.Theme.PSObject.Properties['palette'] -or
     -not (Test-DreamSkinThemePathWithin -Path $updatedTheme.ImagePath -Root $themePaths.Active)) {
     throw 'Imported image did not reset to the generic adaptive contract inside the managed directory.'
   }
@@ -1048,19 +1096,25 @@ args = [
   New-Item -ItemType Directory -Path $releaseFixtureAssets, $releaseFixtureScripts, $releaseFixturePresetDirectory -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $Root 'VERSION') -Destination $releaseFixtureRoot -Force
   foreach ($releaseAsset in @(
-    'dream-skin.css', 'renderer-inject.js', 'safe-css-policy.json', 'safe-css-validator.mjs', 'selectors.json',
+    'dream-skin.css', 'internet-angel-acrylic.css', 'internet-angel-extension.css',
+    'internet-angel-extension.js', 'renderer-inject.js', 'safe-css-policy.json', 'safe-css-validator.mjs', 'selectors.json',
     'theme-package-validator.mjs'
   )) {
     Copy-Item -LiteralPath (Join-Path $Root "assets\$releaseAsset") `
       -Destination $releaseFixtureAssets -Force
   }
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\common-windows.ps1') -Destination $releaseFixtureScripts -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'scripts\acrylic-window.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\apply-community-theme.ps1') -Destination $releaseFixtureScripts -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'scripts\auto-launch-dream-skin.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\check-update.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\config-utf8.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\image-metadata.mjs') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\injector.mjs') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\install-dream-skin.ps1') -Destination $releaseFixtureScripts -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'scripts\manage-auto-launch-dream-skin.ps1') -Destination $releaseFixtureScripts -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'scripts\manage-window-effects.ps1') -Destination $releaseFixtureScripts -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'scripts\patch-dream-skin.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\restore-dream-skin.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\start-dream-skin.ps1') -Destination $releaseFixtureScripts -Force
   Copy-Item -LiteralPath (Join-Path $Root 'scripts\theme-windows.ps1') -Destination $releaseFixtureScripts -Force
@@ -1162,9 +1216,11 @@ args = [
   $css = Read-DreamSkinUtf8File -Path (Join-Path $Root 'assets\dream-skin.css')
   foreach ($requiredCss in @(
     'background-image: var(--dream-art)',
-    'main.main-surface > header.app-header-tint',
+    'main:is(.main-surface, [data-app-shell-main-surface], [class*="_MainContentSurface_"]) > header:is(.app-header-tint, [data-app-shell-header-edge-scroll], [data-app-shell-application-menu-bar], [class*="_Header_"])',
     '[class~="group/application-menu-top-bar"]',
     '.app-shell-main-content-top-fade',
+    'data-app-shell-main-content-top-fade',
+    '_MainContentTopFade_',
     '.thread-scroll-container .bg-gradient-to-t.from-token-main-surface-primary',
     '--dream-immersive-composer',
     'background-position: var(--dream-art-position)',
@@ -1174,9 +1230,12 @@ args = [
     '.dream-summary-panel',
     '.xterm-selection-layer',
     ':has(.dream-home-utility) .composer-surface-chrome',
-    ':is(.dream-task-ambient, .dream-task-banner):has(main.main-surface:not(.dream-home-shell))'
+    'html.codex-dream-skin.dream-art-wide:is(.dream-task-ambient, .dream-task-banner)[data-dream-route]:not([data-dream-route="home"]) body'
   )) {
     if (-not $css.Contains($requiredCss)) { throw "Windows immersive CSS is missing: $requiredCss" }
+  }
+  if ($css.Contains(':is(.dream-task-ambient, .dream-task-banner):has(main:is(.main-surface, [data-app-shell-main-surface], [class*="_MainContentSurface_"]):not(.dream-home-shell))')) {
+    throw 'Windows immersive CSS reintroduced the live structural :has() route selector.'
   }
   if (-not $css.Contains('.dream-home') -or -not $css.Contains('.dream-task') -or
     -not $css.Contains('#codex-dream-skin-chrome')) {
@@ -1325,6 +1384,18 @@ args = [
     -not $startSource.Contains('Start-Sleep -Seconds 3')) {
     throw 'Start lost the verification retry window; a single early-boot miss must not tear the startup down.'
   }
+  if ($startSource.Contains("'--once'") -or $startSource.Contains('`"--once`"') -or
+    $startSource.Contains('$skinLooksRendered')) {
+    throw 'Start reintroduced the retired renderer-only --once verification fallback.'
+  }
+  if (-not (Get-Command Invoke-DreamSkinCodexWindowActivation -CommandType Function -ErrorAction SilentlyContinue)) {
+    throw 'The Windows Codex activation helper is missing from common-windows.ps1.'
+  }
+  if (-not $commonSource.Contains('Stop-Process -Id $processId -Force') -or
+    -not $commonSource.Contains('Wait-Process -Id $processId -Timeout 15') -or
+    -not $commonSource.Contains('Get-CimInstance Win32_Process -Filter "ProcessId = $processId"')) {
+    throw 'Recorded injector shutdown must stop, wait for, and recheck only the exact validated PID.'
+  }
   if (-not $startSource.Contains('direct Store executable fallback did not expose a verified loopback CDP endpoint') -or
     -not $startSource.Contains('may disable CDP in this production runtime')) {
     throw 'A direct launch that retains CDP arguments but exposes no listener no longer reports the owl runtime failure.'
@@ -1339,9 +1410,23 @@ args = [
   if (-not $startSource.Contains('Get-DreamSkinVerifiedCdpIdentityForAnyRegistered')) {
     throw 'Start lost the any-registered endpoint fallback for Store auto-updates.'
   }
+  if (-not $commonSource.Contains('Test-DreamSkinListenerOwnerAlive') -or
+    -not $commonSource.Contains('Resolve-DreamSkinStartPort') -or
+    -not $startSource.Contains('Resolve-DreamSkinStartPort -Port $Port')) {
+    throw 'Start lost stale-listener port recovery after a Codex restart.'
+  }
   $verifyScriptSource = Read-DreamSkinUtf8File -Path (Join-Path $Root 'scripts\verify-dream-skin.ps1')
+  if (-not $verifyScriptSource.Contains(". (Join-Path `$PSScriptRoot 'theme-windows.ps1')")) {
+    throw 'Verify must dot-source theme-windows.ps1 before using theme store helpers such as Get-DreamSkinThemePaths.'
+  }
   if (-not $verifyScriptSource.Contains('Get-DreamSkinVerifiedCdpIdentityForAnyRegistered')) {
     throw 'Verify lost the any-registered endpoint fallback for Store auto-updates.'
+  }
+  $themeImportPattern = '(?m)^\.\s+\(Join-Path \$PSScriptRoot ''theme-windows\.ps1''\)\r?$'
+  $themeImportMatches = [regex]::Matches($verifyScriptSource, $themeImportPattern)
+  $themePathsCallIndex = $verifyScriptSource.IndexOf('Get-DreamSkinThemePaths', [System.StringComparison]::Ordinal)
+  if ($themeImportMatches.Count -ne 1 -or $themePathsCallIndex -le $themeImportMatches[0].Index) {
+    throw 'Verify must import theme-windows.ps1 exactly once before resolving managed theme paths.'
   }
   foreach ($verifyCaller in @(
     @{ Name = 'start-dream-skin.ps1'; Source = $startSource },
@@ -1362,7 +1447,8 @@ args = [
     'STYLE_REVISION', 'PAYLOAD_REVISION', 'artMetadata', 'detectShellAppearance',
     'data-dream-skin', 'ResizeObserver', 'MutationObserver',
     'DOM_REFRESH_DEBOUNCE_MS', 'runEnsureSafely', 'styleMode: "style"',
-    'data-ds-part', 'refreshSafeCssParts'
+    'data-ds-part', 'refreshSafeCssParts', 'const fallbackProbe = () =>',
+    '[data-app-action-sidebar-thread-row]'
   )) {
     if (-not $rendererSource.Contains($requiredRendererBehavior)) {
       throw "Renderer adaptive behavior is missing: $requiredRendererBehavior"
@@ -1380,13 +1466,27 @@ args = [
   & (Join-Path $PSScriptRoot 'community-theme-link.tests.ps1') -Root $Root
   & (Join-Path $PSScriptRoot 'theme-zip-import.tests.ps1') -Root $Root
   & (Join-Path $PSScriptRoot 'start-renderer-readiness.tests.ps1') -Root $Root
+  & (Join-Path $PSScriptRoot 'start-verified-skin-preserved.tests.ps1') -Root $Root
+  & (Join-Path $PSScriptRoot 'auto-launch-safety.tests.ps1') -Root $Root
+  & (Join-Path $PSScriptRoot 'acrylic-window.tests.ps1') -Root $Root
+  & (Join-Path $PSScriptRoot 'window-effects.tests.ps1') -Root $Root
+  & (Join-Path $PSScriptRoot 'port-stale-listener.tests.ps1') -Root $Root
+  & (Join-Path $PSScriptRoot 'runtime-patch.tests.ps1') -Root $Root
   $projectRoot = Split-Path -Parent $Root
   $syncToolPath = Join-Path $projectRoot 'tools\sync-runtime-assets.mjs'
   $syncToolResult = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @($syncToolPath, '--check')
-  if ($syncToolResult.ExitCode -ne 0) { throw "Runtime contract tool failed: $syncToolPath" }
+  if ($syncToolResult.ExitCode -ne 0) {
+    # The tool names each stale file on stdout; without this the failure is
+    # indistinguishable from the tool not running at all.
+    $syncDetail = ($syncToolResult.Output -join "`n").Trim()
+    throw "Runtime contract tool failed: $syncToolPath`n$syncDetail"
+  }
   $doctorToolPath = Join-Path $projectRoot 'tools\doctor-selectors.test.mjs'
   $doctorToolResult = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @($doctorToolPath)
   if ($doctorToolResult.ExitCode -ne 0) { throw "Runtime contract tool failed: $doctorToolPath" }
+  $extensionToolPath = Join-Path $projectRoot 'tools\internet-angel-extension.test.mjs'
+  $extensionToolResult = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @($extensionToolPath)
+  if ($extensionToolResult.ExitCode -ne 0) { throw "Runtime contract tool failed: $extensionToolPath" }
   $injectorSource = Read-DreamSkinUtf8File -Path (Join-Path $Root 'scripts\injector.mjs')
   foreach ($requiredInjectorBehavior in @(
     'MAX_ART_BYTES', 'createHash', 'readImageMetadata', '50MP safety limit', 'STRONG_THEME_AUDIT_MS',
@@ -1418,6 +1518,45 @@ args = [
     throw 'Mismatched live injector identity does not fail closed with preserved state.'
   }
 
+  $recordedInjectorFixture = Join-Path $temporaryRoot 'recorded-injector-fixture.mjs'
+  [System.IO.File]::WriteAllText(
+    $recordedInjectorFixture,
+    "setInterval(() => {}, 600000);`n",
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  $recordedInjectorPort = 49333
+  $recordedInjectorBrowserId = 'fixture-browser'
+  $recordedInjectorArguments = (ConvertTo-DreamSkinProcessArgument -Value $recordedInjectorFixture) +
+    " --watch --port $recordedInjectorPort --browser-id $recordedInjectorBrowserId"
+  $recordedInjectorProcess = Start-Process -FilePath $node.Path `
+    -ArgumentList $recordedInjectorArguments -WindowStyle Hidden -PassThru
+  try {
+    Start-Sleep -Milliseconds 250
+    if ($recordedInjectorProcess.HasExited) {
+      throw 'Recorded injector shutdown fixture exited before its identity could be tested.'
+    }
+    $recordedInjectorState = [pscustomobject]@{
+      injectorPid = $recordedInjectorProcess.Id
+      injectorStartedAt = $recordedInjectorProcess.StartTime.ToUniversalTime().ToString('o')
+      injectorPath = $recordedInjectorFixture
+      nodePath = $node.Path
+      port = $recordedInjectorPort
+      browserId = $recordedInjectorBrowserId
+    }
+    if (-not (Stop-DreamSkinRecordedInjector -State $recordedInjectorState)) {
+      throw 'The identity-validated recorded injector did not report a successful stop.'
+    }
+    $recordedInjectorProcess.Refresh()
+    if (-not $recordedInjectorProcess.HasExited) {
+      throw 'The identity-validated recorded injector was still running after shutdown returned.'
+    }
+  } finally {
+    if (-not $recordedInjectorProcess.HasExited) {
+      Stop-Process -InputObject $recordedInjectorProcess -Force -ErrorAction SilentlyContinue
+      [void]$recordedInjectorProcess.WaitForExit(15000)
+    }
+  }
+
   $stderrProbe = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
     '-e', "process.stderr.write('dream-skin-stderr-probe\n'); process.exit(7)")
   if ($stderrProbe.ExitCode -ne 7 -or ($stderrProbe.Output -join "`n") -notmatch 'dream-skin-stderr-probe') {
@@ -1435,9 +1574,33 @@ args = [
   $payloadTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
     (Join-Path $Root 'scripts\injector.mjs'), '--check-payload')
   if ($payloadTest.ExitCode -ne 0) { throw 'Injector self-test failed.' }
+  $defaultPayload = ($payloadTest.Output -join "`n") | ConvertFrom-Json -ErrorAction Stop
+  if ($defaultPayload.hasPalette -or -not $defaultPayload.hasColors -or
+    $defaultPayload.colorMode -cne 'explicit' -or $defaultPayload.accent -cne '#ff45c8' -or
+    $defaultPayload.explicitColorKeys -isnot [array] -or
+    @($defaultPayload.explicitColorKeys) -notcontains 'accent') {
+    throw 'The bundled legacy Internet Angel accent was not migrated into the normalized colors contract.'
+  }
+  $acrylicPayloadTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
+    (Join-Path $Root 'scripts\injector.mjs'), '--check-payload', '--window-material', 'acrylic')
+  if ($acrylicPayloadTest.ExitCode -ne 0) { throw 'Acrylic payload self-test failed.' }
+  $acrylicPayload = ($acrylicPayloadTest.Output -join "`n") | ConvertFrom-Json -ErrorAction Stop
+  if ("$($acrylicPayload.windowMaterial)" -cne 'acrylic' -or
+    -not [bool]$acrylicPayload.acrylicOverlay) {
+    throw 'Acrylic payload did not include the Internet Angel glass overlay.'
+  }
+  $invalidMaterialTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
+    (Join-Path $Root 'scripts\injector.mjs'), '--check-payload', '--window-material', 'blur')
+  if ($invalidMaterialTest.ExitCode -eq 0) { throw 'Injector accepted an unknown native window material.' }
   $managedPayloadTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
     (Join-Path $Root 'scripts\injector.mjs'), '--check-payload', '--theme-dir', $themePaths.Active)
   if ($managedPayloadTest.ExitCode -ne 0) { throw 'Managed theme payload validation failed.' }
+  $managedPayload = ($managedPayloadTest.Output -join "`n") | ConvertFrom-Json
+  if (-not $managedPayload.pass -or $managedPayload.hasPalette -or -not $managedPayload.hasColors -or
+    $managedPayload.colorMode -notin @('auto', 'explicit') -or
+    $managedPayload.explicitColorKeys -isnot [array]) {
+    throw 'Windows payload drifted from the shared community theme contract.'
+  }
   $oversizedPayloadTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
     (Join-Path $Root 'scripts\injector.mjs'), '--check-payload', '--theme-dir', $oversizedTheme)
   if ($oversizedPayloadTest.ExitCode -eq 0) { throw 'Node injector accepted an image over the 10 MB limit.' }
@@ -1452,7 +1615,10 @@ args = [
   if ($homeResponsiveTest.ExitCode -ne 0) { throw 'Fullscreen Home responsive-layout regression test failed.' }
   $bootstrapTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
     (Join-Path $PSScriptRoot 'injector-bootstrap.test.mjs'))
-  if ($bootstrapTest.ExitCode -ne 0) { throw 'Injector early-bootstrap regression test failed.' }
+  if ($bootstrapTest.ExitCode -ne 0) {
+    $bootstrapDetail = ($bootstrapTest.Output -join "`n").Trim()
+    throw "Injector early-bootstrap regression test failed.`n$bootstrapDetail"
+  }
   $sessionTest = Invoke-DreamSkinNative -FilePath $node.Path -ArgumentList @(
     (Join-Path $PSScriptRoot 'injector-session.test.mjs'))
   if ($sessionTest.ExitCode -ne 0) { throw 'Injector CDP session lifecycle regression test failed.' }
